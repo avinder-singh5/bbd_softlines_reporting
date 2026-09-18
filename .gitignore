@@ -1,0 +1,23 @@
+# Credentials — never commit
+server/service-account.json
+*.json.key
+*credentials*.json
+
+# Python
+server/__pycache__/
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# macOS
+.DS_Store
+
+# Claude Code session data (machine-specific)
+.claude/
+
+# Editor
+.vscode/
+.idea/

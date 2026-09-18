@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<base target="_top">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Event Reporting Center — Big Billion Days</title>
+<?!= include('Stylesheet'); ?>
+</head>
+<body>
+<div class="app">
+<aside class="sidebar">
+  <div class="brand"><div class="logo">🛒</div><div><b>EVENT<br>REPORTING CENTER</b><span>Enterprise Ecommerce</span></div></div>
+  <div class="event-mini"><strong>Big Billion Days <span class="live-dot"></span>Live</strong><small id="eventDateRange">Today</small></div>
+  <div class="navgroup" id="businessSwitcherWrap">
+    <h5>Business</h5>
+    <div id="businessSwitcher"></div>
+  </div>
+  <div id="navGroups"></div>
+  <div class="sidebar-bottom">
+    <div class="quality">
+      <h4>DATA QUALITY</h4>
+      <div class="qrow"><span>🚧 Coming Soon</span></div>
+    </div>
+  </div>
+</aside>
+
+<main class="main">
+<header class="top">
+  <div class="filters">
+    <div class="field"><label>Event</label><div style="padding:7px 0;font-size:12px;font-weight:600">Big Billion Days</div></div>
+    <div class="field"><label>Today</label><div style="padding:7px 0;font-size:12px;font-weight:600" id="todayLabel">—</div></div>
+    <div class="field"><label>Current Hour</label><div style="padding:7px 0;font-size:12px;font-weight:600" id="currentHourLabel">—</div></div>
+    <div class="top-actions" style="margin-left:auto"><button class="btn" id="resetBtn">Reset</button></div>
+  </div>
+</header>
+
+<section class="content" id="content"></section>
+<div class="footer-note">Live Today → Sales is connected to a Google Sheet (real GMV/Units/ASP). Every other tab is pending a data source and shown as Coming Soon.</div>
+</main>
+</div>
+
+<?!= include('DataScript'); ?>
+<?!= include('MainScript'); ?>
+</body>
+</html>

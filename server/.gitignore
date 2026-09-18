@@ -1,0 +1,6 @@
+credentials.json
+token.json
+service-account.json
+venv/
+__pycache__/
+*.pyc
