@@ -1,5 +1,6 @@
 # Credentials — never commit
 server/service-account.json
+.env
 *.json.key
 *credentials*.json
 

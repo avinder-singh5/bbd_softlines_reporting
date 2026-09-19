@@ -13,10 +13,20 @@ Setup: see server/README.md. Supports two auth modes (checked in this order):
      you; one-time browser consent, then caches server/token.json.
 Run:   python3 server/app.py        (serves the whole app on :8934)
 """
+import os
 import time
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
+
+# Load .env from project root if present (ANTHROPIC_API_KEY etc.)
+_env_file = Path(__file__).parent.parent / ".env"
+if _env_file.exists():
+    for _line in _env_file.read_text().splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _, _v = _line.partition("=")
+            os.environ.setdefault(_k.strip(), _v.strip())
 from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2 import service_account
 from google.oauth2.credentials import Credentials
@@ -31,10 +41,16 @@ TOKEN_PATH = SERVER_DIR / "token.json"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 
 # Keep these in sync with apps-script/Code.gs's constants of the same name.
-SALES_SHEET_ID = "1zaFYp_PE0jIlRZjC_As18xLLAFCJM2qaitc_3sMt63Y"
-SALES_SHEET_TAB_NAME = "Sales Live"
-LY_SHEET_TAB_NAME = "Sales Live Historical"
+SALES_SHEET_ID = "1v3XKlF7YIgAQkeJd-sFxGTh1rrsJ1htCCNTJdszT1f0"
+SALES_SHEET_TAB_NAME = "Hourly_sales_2026"
+LY_SHEET_TAB_NAME = "Hourly_sales_2025"
+DAILY_CY_TAB = "Daily_sales_2026"   # Event Summary Sales — CY, on SALES_SHEET_ID
+DAILY_LY_TAB = "Daily_sales_2025"   # Event Summary Sales — LY, on SALES_SHEET_ID
+DAILY_CY_START = 20260910           # BBD 2026 starts 10 Sept
+DAILY_LY_START = 20250825           # BBD 2025 starts 25 Aug
+# BAU lives in FUNNEL_LY_SHEET_ID (sheet 1zaFYp...), tab "BAU sales"
 BAU_SHEET_TAB_NAME = "BAU sales"
+BAU_SHEET_ID_KEY = "funnel_ly"      # read via get_funnel_sheet_values with FUNNEL_LY_SHEET_ID
 # BAU sheet has no date column — gmv/units per row are already totals across
 # this many days (CY = 8 days this year, LY = 11 days last year), so every
 # BAU sum must be divided by the matching day count to get a per-day average.
@@ -50,13 +66,7 @@ FILTER_COLS = {
     "pricePoint": "asp_bucket",
     "sc": "analytic_super_category",
 }
-# Junk/duplicate Super Categories excluded from every aggregation (Sales KPIs,
-# Sales SC/Mega-Cat breakdowns, BAU, filter-options dropdown, and Funnel's
-# SC-level breakdowns) — not just hidden from a table, their rows don't count.
-EXCLUDED_SUPER_CATEGORIES = {
-    "LifeStyle", "GemsAndJewellery", "MensClothingEssentialsAndEthnic",
-    "MensClothingCasualTopwear", "MenAccessory",
-}
+EXCLUDED_SUPER_CATEGORIES: set = set()  # all SCs included
 
 AGGREGATE_CACHE_TTL = 300   # seconds — matches Code.gs's CacheService TTL
 SHEET_READ_CACHE_TTL = 120  # seconds — raw sheet read is the expensive part
@@ -82,6 +92,52 @@ FUNNEL_SC_ALPHA_LY_TAB = "SCxA_MP_Hourly_Funnel_LY"        # FUNNEL_LY_SHEET_ID 
 # TY <-> LY date correspondence isn't a fixed offset (event calendars don't
 # align day-for-day) — resolved per-date from this authoritative mapping tab.
 FUNNEL_DATE_MAP_TAB = "Date Mapping"                       # FUNNEL_LY_SHEET_ID
+
+# ---------------- TRAFFIC — CY tabs in FUNNEL_SHEET_ID, LY tabs in TRAFFIC_LY_SHEET_ID.
+TRAFFIC_BU_CY_TAB        = "BU_Hourly_Traffic_CY"
+TRAFFIC_ALPHA_CY_TAB     = "BUxA_MP_Hourly_Traffic_CY"
+TRAFFIC_SC_CY_TAB        = "SC_Hourly_Traffic_CY"
+TRAFFIC_SC_ALPHA_CY_TAB  = "SCxA_MP_Hourly_Traffic_CY"
+
+TRAFFIC_LY_SHEET_ID      = "1WgaSUWQkGbWVPUXAFj7IEHumVskp0DNTWGlv__hhKWE"
+TRAFFIC_BU_LY_TAB        = "BU_Hourly_Traffic_LY"
+TRAFFIC_ALPHA_LY_TAB     = "BUxA_MP_Hourly_Traffic_LY"
+TRAFFIC_SC_LY_TAB        = "SC_Hourly_Traffic_LY"
+TRAFFIC_SC_ALPHA_LY_TAB  = "SCxA_MP_Hourly_Traffic_LY"
+
+# LY sheet uses different column names and 12-hour event_time instead of hour int.
+# CY col -> LY col mapping (None = computed or same key logic applies)
+TRAFFIC_METRICS = [
+    ("visits",    "bu_visits",          "Visits"),
+    ("direct",    None,                 "Direct Visits"),   # computed: visits - indirect
+    ("indirect",  "indirect_bu_visits", "Indirect Visits"),
+    ("search",    "fm_search_bu_visits","Search"),
+    ("merch",     "fm_merch_bu_visits", "Merch"),
+    ("reco",      "fm_reco_bu_visits",  "Reco"),
+    ("crm",       "crm_bu_visits",      "CRM"),
+    ("perf",      "perf_bu_visits",     "Perf"),
+    ("pn",        "pn_bu_visits",       "PN"),
+]
+TRAFFIC_METRIC_KEYS = [m[0] for m in TRAFFIC_METRICS]
+
+# LY column names differ from CY
+TRAFFIC_LY_COL_MAP = {
+    "bu_visits":          "bu_visits",
+    "indirect_bu_visits": "indirect_bu_visits",
+    "fm_search_bu_visits":"search_bu_visits",
+    "fm_merch_bu_visits": "merch_bu_visits",
+    "fm_reco_bu_visits":  "reco_bu_visits",
+    "crm_bu_visits":      "crm_bu_visits",
+    "perf_bu_visits":     "perf_bu_visits",
+    "pn_bu_visits":       "pn_bu_visits",
+}
+
+# ---------------- CVP INPUTS
+CVP_SHEET_ID  = "12yGRArgcV7zpJ041k7sMrx6_3cGDHWAFzYiHurl3eKI"
+CVP_CY_TAB    = "CY D0"
+CVP_LY_TAB    = "LY D0"
+# output_price_drop = sum(op_cur_asp)/sum(op_bau_asp) - 1
+# input_price_drop  = sum(ip_cur_asp)/sum(ip_bau_asp) - 1
 
 # (metricKey, cyColumn, lyColumn, label) — the 6 KPI/chart/table metrics.
 FUNNEL_METRICS = [
@@ -217,7 +273,12 @@ def resolve_columns(header):
 def row_passes_filters(row, col, filters):
     for key in FILTER_KEYS:
         want = filters.get(key)
-        if want and want != "All" and str(_cell(row, col[key])).strip() != want:
+        if not want or want == "All":
+            continue
+        val = str(_cell(row, col[key])).strip()
+        if key == "pricePoint":
+            val = _norm_pp(val)
+        if val != want:
             return False
     return True
 
@@ -241,6 +302,20 @@ def max_hour_for_date(values, col, date_key):
     accumulating regardless of which business/filter slice you're looking at."""
     hours = [_int(row, col["hour"]) for row in values[1:] if _int(row, col["date"]) == date_key]
     return max(hours) if hours else None
+
+
+MC_DISPLAY_NAMES = {
+    "MC_Branded":   "Mens Clothing Branded",
+    "MC_UnBranded": "Mens Clothing Unbranded",
+    "WomenEthinc":  "Women Ethnic",
+    "WomenWestern": "Women Western",
+    "KidClothing":  "Kid Clothing",
+    "Others":       None,   # drop "Others" megacat
+}
+
+def _mc_display(name):
+    """Normalise megacat display name; returns None to drop the row."""
+    return MC_DISPLAY_NAMES.get(name, name)
 
 
 def aggregate_rows(values, col, target_bu, filters, date_key, hour_limit=None):
@@ -272,13 +347,15 @@ def aggregate_rows(values, col, target_bu, filters, date_key, hour_limit=None):
         pbo = _num(row, col["pbo"])
         others = _num(row, col["others"])
         sc_name = str(_cell(row, col["sc"]) or "Other").strip()
-        mc_name = str(_cell(row, col["megaCat"]) or "Other").strip()
+        mc_raw  = str(_cell(row, col["megaCat"]) or "Other").strip()
+        mc_name = _mc_display(mc_raw)
+        pp_name = _norm_pp(str(_cell(row, col.get("pricePoint", -1)) or "").strip()) or None
 
         oh = overall_by_hour.setdefault(hr, {"gmv": 0, "units": 0})
         oh["gmv"] += gmv
         oh["units"] += units
 
-        scd = sc_data.setdefault(sc_name, {"gmv": 0, "units": 0, "byHour": {}, "payment": {"upi": 0, "cod": 0, "pbo": 0, "others": 0}})
+        scd = sc_data.setdefault(sc_name, {"gmv": 0, "units": 0, "byHour": {}, "payment": {"upi": 0, "cod": 0, "pbo": 0, "others": 0}, "pricePoints": {}})
         scd["gmv"] += gmv
         scd["units"] += units
         scd["payment"]["upi"] += upi
@@ -288,17 +365,24 @@ def aggregate_rows(values, col, target_bu, filters, date_key, hour_limit=None):
         sh = scd["byHour"].setdefault(hr, {"gmv": 0, "units": 0})
         sh["gmv"] += gmv
         sh["units"] += units
+        if pp_name:
+            pp = scd["pricePoints"].setdefault(pp_name, {"gmv": 0, "units": 0})
+            pp["gmv"] += gmv; pp["units"] += units
 
-        mcd = mc_data.setdefault(mc_name, {"gmv": 0, "units": 0, "byHour": {}, "payment": {"upi": 0, "cod": 0, "pbo": 0, "others": 0}})
-        mcd["gmv"] += gmv
-        mcd["units"] += units
-        mcd["payment"]["upi"] += upi
-        mcd["payment"]["cod"] += cod
-        mcd["payment"]["pbo"] += pbo
-        mcd["payment"]["others"] += others
-        mh = mcd["byHour"].setdefault(hr, {"gmv": 0, "units": 0})
-        mh["gmv"] += gmv
-        mh["units"] += units
+        if mc_name is not None:  # skip "Others"
+            mcd = mc_data.setdefault(mc_name, {"gmv": 0, "units": 0, "byHour": {}, "payment": {"upi": 0, "cod": 0, "pbo": 0, "others": 0}, "pricePoints": {}})
+            mcd["gmv"] += gmv
+            mcd["units"] += units
+            mcd["payment"]["upi"] += upi
+            mcd["payment"]["cod"] += cod
+            mcd["payment"]["pbo"] += pbo
+            mcd["payment"]["others"] += others
+            mh = mcd["byHour"].setdefault(hr, {"gmv": 0, "units": 0})
+            mh["gmv"] += gmv
+            mh["units"] += units
+            if pp_name:
+                pp = mcd["pricePoints"].setdefault(pp_name, {"gmv": 0, "units": 0})
+                pp["gmv"] += gmv; pp["units"] += units
 
         total_gmv += gmv
         total_units += units
@@ -322,6 +406,10 @@ def aggregate_rows(values, col, target_bu, filters, date_key, hour_limit=None):
             {
                 "name": name, "gmv": v["gmv"], "units": v["units"], "hourly": to_hourly(v["byHour"]),
                 "paymentShare": payment_shares(v["payment"], v["units"]),
+                "pricePoints": sorted(
+                    [{"name": pp, "gmv": pv["gmv"], "units": pv["units"]} for pp, pv in v.get("pricePoints", {}).items()],
+                    key=lambda r: r["name"]
+                ),
             }
             for name, v in sc_sorted
         ],
@@ -329,6 +417,10 @@ def aggregate_rows(values, col, target_bu, filters, date_key, hour_limit=None):
             {
                 "name": name, "gmv": v["gmv"], "units": v["units"], "hourly": to_hourly(v["byHour"]),
                 "paymentShare": payment_shares(v["payment"], v["units"]),
+                "pricePoints": sorted(
+                    [{"name": pp, "gmv": pv["gmv"], "units": pv["units"]} for pp, pv in v.get("pricePoints", {}).items()],
+                    key=lambda r: r["name"]
+                ),
             }
             for name, v in mc_sorted
         ],
@@ -435,36 +527,82 @@ def spike_ratio(actual, per_day):
     return actual / per_day
 
 
-def breakdown_segments(business_key):
-    """Top-level (label, predicate, [(childLabel, childPredicate), ...]) triples
-    defining the rows of the breakdown table — each top row can be expanded
-    into its Alpha/MP (or Branded/Unbranded) children."""
-    is_apparel = lambda row, col: str(_cell(row, col["sc"])).strip() in LS_APPAREL_SC
-    is_alpha = lambda row, col: str(_cell(row, col["alpha"])).strip() == ALPHA_VALUE
-    is_mp = lambda row, col: str(_cell(row, col["alpha"])).strip() == MP_VALUE
-    is_branded = lambda row, col: str(_cell(row, col["branded"])).strip() == "Branded"
-    is_unbranded = lambda row, col: str(_cell(row, col["branded"])).strip() == "Unbranded"
+# Normalize old asp_bucket labels to the current scheme.
+PP_ALIAS = {
+    "a) 0-500":   "a) 0-300",
+    "b) 501-1k":  "c) 501-1000",
+    "c) 1k-2.5k": "d) 1001-2500",
+    "d) 1000+":   "d) 1001-2500",
+    "d) 2.5k-5k": "e) 2500+",
+    "e) 5k-7.5k": "e) 2500+",
+    "f) 7.5k-10k":"e) 2500+",
+    "g) 10k-15k": "e) 2500+",
+    "h) 15k+":    "e) 2500+",
+    "others":     None,          # drop "others" entirely
+}
+
+def _norm_pp(v):
+    """Returns normalized bucket label, or None if the bucket should be dropped."""
+    return PP_ALIAS.get(v, v)  # returns None for "others" via PP_ALIAS
+
+
+def _get_price_points(values, col):
+    """Collect distinct (normalized) asp_bucket labels that have gmv > 0."""
+    pp_idx = col.get("pricePoint", -1)
+    gmv_idx = col.get("gmv", -1)
+    if pp_idx < 0: return []
+    seen = set()
+    for row in values[1:]:
+        v = str(_cell(row, pp_idx)).strip()
+        if not v or v == "nan": continue
+        try:
+            if gmv_idx >= 0 and float(row[gmv_idx] or 0) <= 0: continue
+        except (ValueError, IndexError):
+            continue
+        normed = _norm_pp(v)
+        if normed is not None:
+            seen.add(normed)
+    return sorted(seen)
+
+
+def breakdown_segments(business_key, values=None, col=None):
+    """Top-level (label, predicate, [(childLabel, childPredicate, [(grandLabel, grandPredicate)])]) triples.
+    3 levels: segment → alpha/BMP/UMP → price point."""
+    is_alpha    = lambda row, c: str(_cell(row, c["alpha"])).strip() == ALPHA_VALUE
+    is_mp       = lambda row, c: str(_cell(row, c["alpha"])).strip() == MP_VALUE
+    is_branded  = lambda row, c: str(_cell(row, c["branded"])).strip() == "Branded"
+    is_unbranded= lambda row, c: str(_cell(row, c["branded"])).strip() == "Unbranded"
+    is_bmp      = lambda row, c: is_mp(row, c) and is_branded(row, c)
+    is_ump      = lambda row, c: is_mp(row, c) and is_unbranded(row, c)
+
+    price_points = _get_price_points(values, col) if values and col else []
+
+    def pp_children(parent_pred):
+        return [(pp, lambda row, c, p=pp, pred=parent_pred:
+                    pred(row, c) and _norm_pp(str(_cell(row, c.get("pricePoint",-1))).strip()) == p, [])
+                for pp in price_points]
 
     if business_key == "LS":
-        is_non_apparel = lambda row, col: not is_apparel(row, col)
+        is_apparel = lambda row, c: str(_cell(row, c["sc"])).strip() in LS_APPAREL_SC
+        is_non_apparel = lambda row, c: not is_apparel(row, c)
         return [
             ("Apparel", is_apparel, [
-                ("Apparel x Alpha", lambda row, col: is_apparel(row, col) and is_alpha(row, col)),
-                ("Apparel x MP", lambda row, col: is_apparel(row, col) and is_mp(row, col)),
+                ("Alpha", lambda row, c: is_apparel(row, c) and is_alpha(row, c), pp_children(lambda row, c: is_apparel(row, c) and is_alpha(row, c))),
+                ("BMP",   lambda row, c: is_apparel(row, c) and is_bmp(row, c),  pp_children(lambda row, c: is_apparel(row, c) and is_bmp(row, c))),
+                ("UMP",   lambda row, c: is_apparel(row, c) and is_ump(row, c),  pp_children(lambda row, c: is_apparel(row, c) and is_ump(row, c))),
             ]),
             ("Non-Apparel", is_non_apparel, [
-                ("Non-Apparel x Alpha", lambda row, col: is_non_apparel(row, col) and is_alpha(row, col)),
-                ("Non-Apparel x MP", lambda row, col: is_non_apparel(row, col) and is_mp(row, col)),
+                ("Alpha", lambda row, c: is_non_apparel(row, c) and is_alpha(row, c), pp_children(lambda row, c: is_non_apparel(row, c) and is_alpha(row, c))),
+                ("BMP",   lambda row, c: is_non_apparel(row, c) and is_bmp(row, c),  pp_children(lambda row, c: is_non_apparel(row, c) and is_bmp(row, c))),
+                ("UMP",   lambda row, c: is_non_apparel(row, c) and is_ump(row, c),  pp_children(lambda row, c: is_non_apparel(row, c) and is_ump(row, c))),
             ]),
         ]
+    # BGM / Home / Furniture — Alpha → price points; MP → Branded/Unbranded → price points
     return [
-        ("Alpha", is_alpha, [
-            ("Alpha x Branded", lambda row, col: is_alpha(row, col) and is_branded(row, col)),
-            ("Alpha x Unbranded", lambda row, col: is_alpha(row, col) and is_unbranded(row, col)),
-        ]),
+        ("Alpha", is_alpha, pp_children(is_alpha)),
         ("MP", is_mp, [
-            ("MP x Branded", lambda row, col: is_mp(row, col) and is_branded(row, col)),
-            ("MP x Unbranded", lambda row, col: is_mp(row, col) and is_unbranded(row, col)),
+            ("Branded MP",   is_bmp, pp_children(is_bmp)),
+            ("Unbranded MP", is_ump, pp_children(is_ump)),
         ]),
     ]
 
@@ -490,9 +628,14 @@ def compute_breakdown(business_key, ty_values, ty_col, target_bu, filters, ty_da
         return row
 
     rows = []
-    for label, predicate, children in breakdown_segments(business_key):
+    for label, predicate, children in breakdown_segments(business_key, ty_values, ty_col):
         row = row_for(label, predicate)
-        row["children"] = [row_for(clabel, cpredicate) for clabel, cpredicate in children]
+        child_rows = []
+        for clabel, cpredicate, grandchildren in children:
+            child_row = row_for(clabel, cpredicate)
+            child_row["children"] = [row_for(glabel, gpredicate) for glabel, gpredicate, *_ in grandchildren]
+            child_rows.append(child_row)
+        row["children"] = child_rows
         rows.append(row)
     return rows
 
@@ -749,6 +892,295 @@ def get_funnel_data(business_key, day_key="D0", alpha_filter="All", sc_filter="A
     }
 
 
+def traffic_grain_tab(alpha_active, sc_active):
+    if alpha_active and sc_active:
+        return TRAFFIC_SC_ALPHA_CY_TAB
+    if sc_active:
+        return TRAFFIC_SC_CY_TAB
+    if alpha_active:
+        return TRAFFIC_ALPHA_CY_TAB
+    return TRAFFIC_BU_CY_TAB
+
+
+def resolve_traffic_columns(header):
+    def idx(name):
+        return header.index(name) if name in header else -1
+    cols = {"date": idx("date"), "hour": idx("hour"), "bu": idx("business_unit"),
+            "sellerType": idx("seller_type"), "sc": idx("super_category")}
+    for key, col_name, _ in TRAFFIC_METRICS:
+        cols[key] = idx(col_name) if col_name else -1
+    return cols
+
+
+def resolve_traffic_ly_columns(header):
+    """LY traffic tabs use date_key, event_time (12h), business_unit, and different metric names."""
+    def idx(name): return header.index(name) if name in header else -1
+    cols = {
+        "date": idx("date_key"), "eventTime": idx("event_time"),
+        "bu": idx("business_unit"), "sellerType": idx("seller_type"),
+        "sc": idx("super_category"),
+    }
+    for key, cy_col, _ in TRAFFIC_METRICS:
+        ly_col = TRAFFIC_LY_COL_MAP.get(cy_col) if cy_col else None
+        cols[key] = idx(ly_col) if ly_col else -1
+    return cols
+
+
+def _event_time_to_hour(event_time_str):
+    """Convert '1:00 AM'/'12:00 PM' etc to 0-23 int."""
+    try:
+        s = str(event_time_str).strip().upper()
+        parts = s.split()
+        hm = parts[0].split(":")
+        h = int(hm[0])
+        ampm = parts[1] if len(parts) > 1 else "AM"
+        if ampm == "AM":
+            return 0 if h == 12 else h
+        else:
+            return 12 if h == 12 else h + 12
+    except Exception:
+        return -1
+
+
+def aggregate_traffic_ly_rows(values, col, target_bu, date_key, hour_limit=None, seller_filter=None, sc_filter=None):
+    """Aggregate LY traffic rows — same shape output as aggregate_traffic_rows."""
+    totals = {k: 0 for k in TRAFFIC_METRIC_KEYS}
+    by_hour = {}
+    row_count = 0
+    for row in values[1:]:
+        if _int(row, col["date"]) != date_key:
+            continue
+        hr = _event_time_to_hour(_cell(row, col["eventTime"]))
+        if hr < 0:
+            continue
+        if hour_limit is not None and hr >= hour_limit:
+            continue
+        if str(_cell(row, col["bu"])).strip() != target_bu:
+            continue
+        if seller_filter and str(_cell(row, col.get("sellerType", -1))).strip() != seller_filter:
+            continue
+        sc_name = str(_cell(row, col.get("sc", -1)) or "").strip()
+        if sc_name and sc_name in EXCLUDED_SUPER_CATEGORIES:
+            continue
+        if sc_filter and sc_name != sc_filter:
+            continue
+        visits   = _num(row, col["visits"])
+        indirect = _num(row, col["indirect"])
+        direct   = max(0, visits - indirect)
+        vals = {
+            "visits": visits, "direct": direct, "indirect": indirect,
+            "search": _num(row, col["search"]), "merch": _num(row, col["merch"]),
+            "reco":   _num(row, col["reco"]),   "crm":   _num(row, col["crm"]),
+            "perf":   _num(row, col["perf"]),   "pn":    _num(row, col["pn"]),
+        }
+        oh = by_hour.setdefault(hr, {k: 0 for k in TRAFFIC_METRIC_KEYS})
+        for k, v in vals.items():
+            oh[k] += v
+            totals[k] += v
+        row_count += 1
+    hourly = [dict({"hour": h}, **by_hour[h]) for h in sorted(by_hour)]
+    return {"rowCount": row_count, "totals": totals, "hourly": hourly}
+
+
+def traffic_ly_grain_tabs(alpha_active, sc_active):
+    if alpha_active and sc_active:
+        return TRAFFIC_SC_ALPHA_LY_TAB
+    if sc_active:
+        return TRAFFIC_SC_LY_TAB
+    if alpha_active:
+        return TRAFFIC_ALPHA_LY_TAB
+    return TRAFFIC_BU_LY_TAB
+
+
+def aggregate_traffic_rows(values, col, target_bu, date_key, hour_limit=None, seller_filter=None, sc_filter=None):
+    totals = {k: 0 for k in TRAFFIC_METRIC_KEYS}
+    by_hour = {}
+    row_count = 0
+    for row in values[1:]:
+        if _int(row, col["date"]) != date_key:
+            continue
+        hr = _int(row, col["hour"])
+        if hour_limit is not None and hr >= hour_limit:
+            continue
+        if str(_cell(row, col["bu"])).strip() != target_bu:
+            continue
+        if seller_filter and str(_cell(row, col["sellerType"])).strip() != seller_filter:
+            continue
+        sc_name = str(_cell(row, col.get("sc", -1)) or "").strip()
+        if sc_name and sc_name in EXCLUDED_SUPER_CATEGORIES:
+            continue
+        if sc_filter and sc_name != sc_filter:
+            continue
+        visits    = _num(row, col["visits"])
+        indirect  = _num(row, col["indirect"])
+        direct    = max(0, visits - indirect)
+        search    = _num(row, col["search"])
+        merch     = _num(row, col["merch"])
+        reco      = _num(row, col["reco"])
+        crm       = _num(row, col["crm"])
+        perf      = _num(row, col["perf"])
+        pn        = _num(row, col["pn"])
+        vals = {"visits": visits, "direct": direct, "indirect": indirect,
+                "search": search, "merch": merch, "reco": reco,
+                "crm": crm, "perf": perf, "pn": pn}
+        oh = by_hour.setdefault(hr, {k: 0 for k in TRAFFIC_METRIC_KEYS})
+        for k, v in vals.items():
+            oh[k] += v
+            totals[k] += v
+        row_count += 1
+    hourly = [dict({"hour": h}, **by_hour[h]) for h in sorted(by_hour)]
+    return {"rowCount": row_count, "totals": totals, "hourly": hourly}
+
+
+def traffic_sc_breakdown(values, col, target_bu, date_key, hour_limit, seller_filter=None, sc_filter=None):
+    sc_data = {}
+    for row in values[1:]:
+        if _int(row, col["date"]) != date_key:
+            continue
+        hr = _int(row, col["hour"])
+        if hour_limit is not None and hr >= hour_limit:
+            continue
+        if str(_cell(row, col["bu"])).strip() != target_bu:
+            continue
+        if seller_filter and str(_cell(row, col.get("sellerType", -1))).strip() != seller_filter:
+            continue
+        sc_name = str(_cell(row, col.get("sc", -1)) or "Other").strip()
+        if sc_name in EXCLUDED_SUPER_CATEGORIES:
+            continue
+        if sc_filter and sc_name != sc_filter:
+            continue
+        visits   = _num(row, col["visits"])
+        indirect = _num(row, col["indirect"])
+        d = sc_data.setdefault(sc_name, {k: 0 for k in TRAFFIC_METRIC_KEYS})
+        d["visits"]   += visits
+        d["direct"]   += max(0, visits - indirect)
+        d["indirect"] += indirect
+        d["search"]   += _num(row, col["search"])
+        d["merch"]    += _num(row, col["merch"])
+        d["reco"]     += _num(row, col["reco"])
+        d["crm"]      += _num(row, col["crm"])
+        d["perf"]     += _num(row, col["perf"])
+        d["pn"]       += _num(row, col["pn"])
+    return [dict({"name": name}, **v) for name, v in sorted(sc_data.items(), key=lambda kv: -kv[1]["visits"])]
+
+
+def traffic_sc_ly_breakdown(values, col, target_bu, date_key, hour_limit, seller_filter=None, sc_filter=None):
+    sc_data = {}
+    for row in values[1:]:
+        if _int(row, col["date"]) != date_key:
+            continue
+        hr = _event_time_to_hour(_cell(row, col["eventTime"]))
+        if hr < 0 or (hour_limit is not None and hr >= hour_limit):
+            continue
+        if str(_cell(row, col["bu"])).strip() != target_bu:
+            continue
+        if seller_filter and str(_cell(row, col.get("sellerType", -1))).strip() != seller_filter:
+            continue
+        sc_name = str(_cell(row, col.get("sc", -1)) or "Other").strip()
+        if sc_name in EXCLUDED_SUPER_CATEGORIES:
+            continue
+        if sc_filter and sc_name != sc_filter:
+            continue
+        visits   = _num(row, col["visits"])
+        indirect = _num(row, col["indirect"])
+        d = sc_data.setdefault(sc_name, {k: 0 for k in TRAFFIC_METRIC_KEYS})
+        d["visits"]   += visits
+        d["direct"]   += max(0, visits - indirect)
+        d["indirect"] += indirect
+        d["search"]   += _num(row, col["search"])
+        d["merch"]    += _num(row, col["merch"])
+        d["reco"]     += _num(row, col["reco"])
+        d["crm"]      += _num(row, col["crm"])
+        d["perf"]     += _num(row, col["perf"])
+        d["pn"]       += _num(row, col["pn"])
+    return [dict({"name": name}, **v) for name, v in sc_data.items()]
+
+
+def get_traffic_data(business_key, day_key="D0", alpha_filter="All", sc_filter="All"):
+    target_bu = BUSINESS_SHEET_MAP.get(business_key, business_key)
+    alpha_active = bool(alpha_filter) and alpha_filter != "All"
+    sc_active    = bool(sc_filter)    and sc_filter    != "All"
+    seller_filter  = alpha_filter if alpha_active else None
+    sc_filter_val  = sc_filter    if sc_active    else None
+
+    cy_tab = traffic_grain_tab(alpha_active, sc_active)
+    cy_values = get_funnel_sheet_values(cy_tab, sheet_id=FUNNEL_SHEET_ID)
+    if not cy_values:
+        return {"business": business_key, "sheetBusinessUnit": target_bu, "dateKey": 0,
+                "rowCount": 0, "totals": {k: 0 for k in TRAFFIC_METRIC_KEYS}, "hourly": [],
+                "days": [], "selectedDay": day_key, "superCategories": []}
+
+    cy_header = [str(h).strip() for h in cy_values[0]]
+    col = resolve_traffic_columns(cy_header)
+    ty_dates = distinct_dates(cy_values, col)
+    days = available_days(ty_dates)
+
+    selected_day  = day_key if any(d["key"] == day_key for d in days) else "D0"
+    selected_date = next((d["dateKey"] for d in days if d["key"] == selected_day), (ty_dates[-1] if ty_dates else 0))
+    is_current_day = ty_dates and selected_date == ty_dates[-1]
+
+    latest_hour = max_hour_for_date(cy_values, col, selected_date) if is_current_day else None
+    hour_limit  = latest_hour if (is_current_day and latest_hour is not None and latest_hour < 24) else None
+
+    ty_agg = aggregate_traffic_rows(cy_values, col, target_bu, selected_date, hour_limit=hour_limit,
+                                    seller_filter=seller_filter, sc_filter=sc_filter_val)
+
+    # LY — resolve date via date map, read from LY sheet with same grain
+    date_map = get_funnel_date_map()
+    ly_date_int = date_map.get(selected_date)
+    ly_result = None
+    if ly_date_int:
+        ly_tab = traffic_ly_grain_tabs(alpha_active, sc_active)
+        try:
+            ly_values = get_funnel_sheet_values(ly_tab, sheet_id=TRAFFIC_LY_SHEET_ID)
+        except Exception:
+            ly_values = None
+        if ly_values:
+            ly_col = resolve_traffic_ly_columns([str(h).strip() for h in ly_values[0]])
+            ly_full = aggregate_traffic_ly_rows(ly_values, ly_col, target_bu, ly_date_int,
+                                                seller_filter=seller_filter, sc_filter=sc_filter_val)
+            ly_capped = ly_full if hour_limit is None else \
+                aggregate_traffic_ly_rows(ly_values, ly_col, target_bu, ly_date_int,
+                                          hour_limit=hour_limit, seller_filter=seller_filter, sc_filter=sc_filter_val)
+            if ly_full["rowCount"] > 0:
+                ly_result = {"dateKey": ly_date_int, "totals": ly_capped["totals"], "hourly": ly_full["hourly"]}
+
+    # SC breakdown — fall back to SC x Alpha/MP grain when alpha filter is active
+    sc_tab = TRAFFIC_SC_ALPHA_CY_TAB if alpha_active else TRAFFIC_SC_CY_TAB
+    try:
+        sc_values = get_funnel_sheet_values(sc_tab, sheet_id=FUNNEL_SHEET_ID)
+    except Exception:
+        sc_values = None
+    super_categories = []
+    if sc_values:
+        sc_col = resolve_traffic_columns([str(h).strip() for h in sc_values[0]])
+        super_categories = traffic_sc_breakdown(sc_values, sc_col, target_bu, selected_date, hour_limit,
+                                                seller_filter=seller_filter, sc_filter=sc_filter_val)
+    # Attach LY to SC rows by name
+    if ly_result and ly_date_int:
+        ly_sc_tab = TRAFFIC_SC_ALPHA_LY_TAB if alpha_active else TRAFFIC_SC_LY_TAB
+        try:
+            ly_sc_vals = get_funnel_sheet_values(ly_sc_tab, sheet_id=TRAFFIC_LY_SHEET_ID)
+        except Exception:
+            ly_sc_vals = None
+        if ly_sc_vals:
+            ly_sc_col = resolve_traffic_ly_columns([str(h).strip() for h in ly_sc_vals[0]])
+            ly_sc_rows = traffic_sc_ly_breakdown(ly_sc_vals, ly_sc_col, target_bu, ly_date_int,
+                                                  hour_limit, seller_filter=seller_filter, sc_filter=sc_filter_val)
+            ly_sc_by_name = {r["name"]: r for r in ly_sc_rows}
+            for r in super_categories:
+                r["ly"] = ly_sc_by_name.get(r["name"])
+
+    return {
+        "business": business_key, "sheetBusinessUnit": target_bu, "dateKey": selected_date,
+        "excludedHour": latest_hour if hour_limit is not None else None,
+        "days": days, "selectedDay": selected_day,
+        "rowCount": ty_agg["rowCount"], "totals": ty_agg["totals"], "hourly": ty_agg["hourly"],
+        "ly": ly_result,
+        "superCategories": super_categories,
+    }
+
+
 def get_live_sales_data(business_key, filters, day_key="D0"):
     target_bu = BUSINESS_SHEET_MAP.get(business_key, business_key)
 
@@ -817,6 +1249,7 @@ def get_live_sales_data(business_key, filters, day_key="D0"):
                         "units": (capped_by_name[name]["units"] if name in capped_by_name else 0),
                         "paymentShare": (capped_by_name[name]["paymentShare"] if name in capped_by_name else empty_payment),
                         "hourly": full["hourly"],  # full day, for the chart
+                        "pricePoints": (capped_by_name[name]["pricePoints"] if name in capped_by_name else []),
                     }
                     for name, full in full_by_name.items()
                 ]
@@ -845,7 +1278,7 @@ def get_live_sales_data(business_key, filters, day_key="D0"):
     bau_values = bau_col = None
     bau_cy_year = bau_ly_year = None
     try:
-        bau_values = get_sheet_values(BAU_SHEET_TAB_NAME)
+        bau_values = get_funnel_sheet_values(BAU_SHEET_TAB_NAME, sheet_id=FUNNEL_LY_SHEET_ID)
     except Exception:
         bau_values = None
     if bau_values:
@@ -915,6 +1348,248 @@ def get_live_sales_data(business_key, filters, day_key="D0"):
     }
 
 
+def resolve_daily_columns(header):
+    """Like resolve_columns but daily sheets have order_date_key and no hour_of_day."""
+    def idx(name): return header.index(name) if name in header else -1
+    return {
+        "date": idx("order_date_key"),
+        "hour": -1,   # no hour in daily sheets
+        "bu": idx("analytic_business_unit"), "sc": idx("analytic_super_category"),
+        "megaCat": idx("mega_cat"),
+        "gmv": idx("gmv"), "units": idx("units"),
+        "upi": idx("upi_units"), "cod": idx("cod_units"), "pbo": idx("pbo_units"), "others": idx("others_units"),
+        "marketplace": idx(FILTER_COLS["marketplace"]),
+        "branded": idx(FILTER_COLS["branded"]),
+        "alpha": idx(FILTER_COLS["alpha"]),
+        "pricePoint": idx(FILTER_COLS["pricePoint"]),
+    }
+
+
+def aggregate_daily_rows(values, col, target_bu, filters, min_date=None):
+    """Like aggregate_rows but groups by date (day) instead of hour_of_day.
+    Returns totalGmv, totalUnits, daily=[{day, gmv, units}], superCategories, etc."""
+    daily_by_date = {}
+    overall_gmv = overall_units = 0
+    payment_units = {"upi": 0, "cod": 0, "pbo": 0, "others": 0}
+    sc_data = {}
+    mc_data = {}
+    row_count = 0
+
+    for row in values[1:]:
+        if str(_cell(row, col["bu"])).strip() != target_bu:
+            continue
+        if not row_passes_filters(row, col, filters):
+            continue
+        date_key = _int(row, col["date"])
+        if min_date and date_key < min_date:
+            continue
+
+        gmv = _num(row, col["gmv"])
+        units = _num(row, col["units"])
+        sc_name = str(_cell(row, col["sc"]) or "Other").strip()
+        mc_raw = str(_cell(row, col["megaCat"]) or "Other").strip()
+        mc_name = _mc_display(mc_raw)
+        pp_name = _norm_pp(str(_cell(row, col.get("pricePoint", -1)) or "").strip()) or None
+
+        row_count += 1
+        overall_gmv += gmv
+        overall_units += units
+        payment_units["upi"] += _num(row, col["upi"])
+        payment_units["cod"] += _num(row, col["cod"])
+        payment_units["pbo"] += _num(row, col["pbo"])
+        payment_units["others"] += _num(row, col["others"])
+
+        dd = daily_by_date.setdefault(date_key, {"gmv": 0, "units": 0})
+        dd["gmv"] += gmv
+        dd["units"] += units
+
+        scd = sc_data.setdefault(sc_name, {"gmv": 0, "units": 0, "pricePoints": {}})
+        scd["gmv"] += gmv
+        scd["units"] += units
+        if pp_name:
+            ppd = scd["pricePoints"].setdefault(pp_name, {"gmv": 0, "units": 0})
+            ppd["gmv"] += gmv
+            ppd["units"] += units
+
+        if mc_name:
+            mcd = mc_data.setdefault(mc_name, {"gmv": 0, "units": 0, "pricePoints": {}})
+            mcd["gmv"] += gmv
+            mcd["units"] += units
+            if pp_name:
+                ppd = mcd["pricePoints"].setdefault(pp_name, {"gmv": 0, "units": 0})
+                ppd["gmv"] += gmv
+                ppd["units"] += units
+
+    sc_sorted = sorted(sc_data.items(), key=lambda kv: -kv[1]["gmv"])
+    mc_sorted = sorted(mc_data.items(), key=lambda kv: -kv[1]["gmv"])
+
+    def pp_list(ppd):
+        return sorted([{"name": n, "gmv": v["gmv"], "units": v["units"]} for n, v in ppd.items()],
+                      key=lambda x: x["name"])
+
+    return {
+        "rowCount": row_count,
+        "totalGmv": overall_gmv,
+        "totalUnits": overall_units,
+        "paymentUnits": payment_units,
+        "daily": [{"day": d, "gmv": v["gmv"], "units": v["units"]}
+                  for d, v in sorted(daily_by_date.items())],
+        "superCategories": [{"name": n, "gmv": v["gmv"], "units": v["units"],
+                              "pricePoints": pp_list(v["pricePoints"])} for n, v in sc_sorted],
+        "megaCategories": [{"name": n, "gmv": v["gmv"], "units": v["units"],
+                             "pricePoints": pp_list(v["pricePoints"])} for n, v in mc_sorted],
+    }
+
+
+def compute_daily_breakdown(business_key, ty_values, ty_col, target_bu, filters,
+                            ly_values, ly_col,
+                            bau_values=None, bau_col=None, bau_cy_year=None, bau_ly_year=None):
+    """Same shape as compute_breakdown but sums across event window only."""
+    def row_for_daily(label, predicate):
+        ty = {"gmv": 0, "units": 0}
+        ly = {"gmv": 0, "units": 0}
+        for row in (ty_values[1:] if ty_values else []):
+            if str(_cell(row, ty_col["bu"])).strip() != target_bu: continue
+            if not row_passes_filters(row, ty_col, filters): continue
+            if _int(row, ty_col["date"]) < DAILY_CY_START: continue
+            if predicate and not predicate(row, ty_col): continue
+            ty["gmv"] += _num(row, ty_col["gmv"])
+            ty["units"] += _num(row, ty_col["units"])
+        for row in (ly_values[1:] if ly_values else []):
+            if str(_cell(row, ly_col["bu"])).strip() != target_bu: continue
+            if not row_passes_filters(row, ly_col, filters): continue
+            if _int(row, ly_col["date"]) < DAILY_LY_START: continue
+            if predicate and not predicate(row, ly_col): continue
+            ly["gmv"] += _num(row, ly_col["gmv"])
+            ly["units"] += _num(row, ly_col["units"])
+        row = {"label": label, "tyGmv": ty["gmv"], "tyUnits": ty["units"],
+               "lyGmv": ly["gmv"], "lyUnits": ly["units"]}
+        if bau_values and bau_cy_year:
+            cy_b = bau_per_day(bau_values, bau_col, target_bu, filters, bau_cy_year, BAU_DAY_COUNTS["cy"], None, predicate)
+            ly_b = bau_per_day(bau_values, bau_col, target_bu, filters, bau_ly_year, BAU_DAY_COUNTS["ly"], None, predicate)
+            row["cyGmvSpike"] = spike_ratio(ty["gmv"], cy_b["gmv"] * BAU_DAY_COUNTS["cy"])
+            row["lyGmvSpike"] = spike_ratio(ly["gmv"], ly_b["gmv"] * BAU_DAY_COUNTS["ly"])
+            row["cyUnitsSpike"] = spike_ratio(ty["units"], cy_b["units"] * BAU_DAY_COUNTS["cy"])
+            row["lyUnitsSpike"] = spike_ratio(ly["units"], ly_b["units"] * BAU_DAY_COUNTS["ly"])
+        else:
+            row["cyGmvSpike"] = row["lyGmvSpike"] = row["cyUnitsSpike"] = row["lyUnitsSpike"] = None
+        return row
+
+    rows = []
+    for label, predicate, children in breakdown_segments(business_key, ty_values, ty_col):
+        row = row_for_daily(label, predicate)
+        child_rows = []
+        for clabel, cpredicate, grandchildren in children:
+            child_row = row_for_daily(clabel, cpredicate)
+            child_row["children"] = [row_for_daily(glabel, gpredicate) for glabel, gpredicate, *_ in grandchildren]
+            child_rows.append(child_row)
+        row["children"] = child_rows
+        rows.append(row)
+    return rows
+
+
+def get_summary_sales_data(business_key, filters):
+    """Event Summary Sales — daily trend across entire event, same structure as
+    get_live_sales_data but uses Daily_sales_2026/2025 and no hour filtering."""
+    target_bu = BUSINESS_SHEET_MAP.get(business_key, business_key)
+
+    ty_values = None
+    try:
+        ty_values = get_sheet_values(DAILY_CY_TAB)
+    except Exception:
+        pass
+    if not ty_values:
+        return {"business": business_key, "rowCount": 0, "totalGmv": 0, "totalUnits": 0,
+                "daily": [], "superCategories": [], "megaCategories": [], "ly": None,
+                "breakdown": [], "bauSpike": None,
+                "paymentShare": payment_shares({"upi": 0, "cod": 0, "pbo": 0, "others": 0}, 0)}
+
+    ty_header = [str(h).strip() for h in ty_values[0]]
+    ty_col = resolve_daily_columns(ty_header)
+    ty_agg = aggregate_daily_rows(ty_values, ty_col, target_bu, filters, min_date=DAILY_CY_START)
+
+    ly_values = ly_col = None
+    ly_agg = None
+    try:
+        ly_values = get_sheet_values(DAILY_LY_TAB)
+    except Exception:
+        pass
+    if ly_values:
+        ly_header = [str(h).strip() for h in ly_values[0]]
+        ly_col = resolve_daily_columns(ly_header)
+        ly_agg = aggregate_daily_rows(ly_values, ly_col, target_bu, filters, min_date=DAILY_LY_START)
+
+    ly_result = None
+    if ly_agg:
+        ly_result = {
+            "totalGmv": ly_agg["totalGmv"], "totalUnits": ly_agg["totalUnits"],
+            "daily": ly_agg["daily"],
+            "paymentShare": payment_shares(ly_agg["paymentUnits"], ly_agg["totalUnits"]),
+            "superCategories": ly_agg["superCategories"],
+            "megaCategories": ly_agg["megaCategories"] if business_key == "LS" else [],
+        }
+
+    bau_values = bau_col = bau_cy_year = bau_ly_year = None
+    try:
+        bau_values = get_funnel_sheet_values(BAU_SHEET_TAB_NAME, sheet_id=FUNNEL_LY_SHEET_ID)
+    except Exception:
+        pass
+    if bau_values:
+        bau_header = [str(h).strip() for h in bau_values[0]]
+        bau_col = resolve_bau_columns(bau_header)
+        bau_cy_year, bau_ly_year = bau_years(bau_values, bau_col)
+
+    bau_spike = None
+    if bau_values and bau_cy_year:
+        # For event-level spike: compare total event GMV vs BAU total (per-day * event_days)
+        cy_bau = bau_per_day(bau_values, bau_col, target_bu, filters, bau_cy_year, BAU_DAY_COUNTS["cy"], None)
+        ly_bau = bau_per_day(bau_values, bau_col, target_bu, filters, bau_ly_year, BAU_DAY_COUNTS["ly"], None)
+        event_cy_days = len(ty_agg["daily"]) or BAU_DAY_COUNTS["cy"]
+        event_ly_days = len(ly_agg["daily"]) if ly_agg else BAU_DAY_COUNTS["ly"]
+        bau_spike = {
+            "gmv": {
+                "cy": spike_ratio(ty_agg["totalGmv"], cy_bau["gmv"] * event_cy_days),
+                "ly": spike_ratio(ly_result["totalGmv"], ly_bau["gmv"] * event_ly_days) if ly_result else None,
+            },
+            "units": {
+                "cy": spike_ratio(ty_agg["totalUnits"], cy_bau["units"] * event_cy_days),
+                "ly": spike_ratio(ly_result["totalUnits"], ly_bau["units"] * event_ly_days) if ly_result else None,
+            },
+        }
+        ly_sc_by_name = {s["name"]: s for s in (ly_result["superCategories"] if ly_result else [])}
+        for sc in ty_agg["superCategories"]:
+            is_this_sc = lambda row, col, name=sc["name"]: str(_cell(row, col["sc"])).strip() == name
+            cy_sc_bau = bau_per_day(bau_values, bau_col, target_bu, filters, bau_cy_year, BAU_DAY_COUNTS["cy"], None, is_this_sc)
+            ly_sc_bau = bau_per_day(bau_values, bau_col, target_bu, filters, bau_ly_year, BAU_DAY_COUNTS["ly"], None, is_this_sc)
+            ly_sc = ly_sc_by_name.get(sc["name"])
+            sc["cyGmvSpike"] = spike_ratio(sc["gmv"], cy_sc_bau["gmv"] * event_cy_days)
+            sc["cyUnitsSpike"] = spike_ratio(sc["units"], cy_sc_bau["units"] * event_cy_days)
+            sc["lyGmvSpike"] = spike_ratio(ly_sc["gmv"], ly_sc_bau["gmv"] * event_ly_days) if ly_sc else None
+            sc["lyUnitsSpike"] = spike_ratio(ly_sc["units"], ly_sc_bau["units"] * event_ly_days) if ly_sc else None
+    else:
+        for sc in ty_agg["superCategories"]:
+            sc["cyGmvSpike"] = sc["lyGmvSpike"] = sc["cyUnitsSpike"] = sc["lyUnitsSpike"] = None
+        for mc in ty_agg["megaCategories"]:
+            mc["cyGmvSpike"] = mc["lyGmvSpike"] = mc["cyUnitsSpike"] = mc["lyUnitsSpike"] = None
+
+    breakdown = compute_daily_breakdown(
+        business_key, ty_values, ty_col, target_bu, filters,
+        ly_values, ly_col, bau_values, bau_col, bau_cy_year, bau_ly_year,
+    )
+
+    return {
+        "business": business_key, "rowCount": ty_agg["rowCount"],
+        "totalGmv": ty_agg["totalGmv"], "totalUnits": ty_agg["totalUnits"],
+        "daily": ty_agg["daily"],
+        "paymentShare": payment_shares(ty_agg["paymentUnits"], ty_agg["totalUnits"]),
+        "superCategories": ty_agg["superCategories"],
+        "megaCategories": ty_agg["megaCategories"] if business_key == "LS" else [],
+        "ly": ly_result,
+        "breakdown": breakdown,
+        "bauSpike": bau_spike,
+    }
+
+
 def parse_filters(args):
     return {k: args.get(k, "All") for k in FILTER_KEYS}
 
@@ -936,6 +1611,26 @@ def api_live_sales():
     try:
         result = get_live_sales_data(business, filters, day_key)
     except Exception as e:  # noqa: BLE001 — surface any auth/API error to the UI
+        return jsonify({"error": str(e)}), 500
+    # Only cache when both TY and LY are present — avoids serving a stale
+    # ly=None result after the LY sheet is populated mid-session.
+    if result["rowCount"] > 0 and result.get("ly") is not None:
+        _aggregate_cache[key] = (now, result)
+    return jsonify(result)
+
+
+@app.route("/api/summary-sales")
+def api_summary_sales():
+    business = request.args.get("business", "LS")
+    filters = parse_filters(request.args)
+    key = ("summary-sales", business) + tuple(filters.get(k, "All") for k in FILTER_KEYS)
+    now = time.time()
+    cached = _aggregate_cache.get(key)
+    if cached and now - cached[0] < AGGREGATE_CACHE_TTL:
+        return jsonify(cached[1])
+    try:
+        result = get_summary_sales_data(business, filters)
+    except Exception as e:
         return jsonify({"error": str(e)}), 500
     if result["rowCount"] > 0:
         _aggregate_cache[key] = (now, result)
@@ -980,6 +1675,268 @@ def api_funnel_filter_options():
             if name and name not in EXCLUDED_SUPER_CATEGORIES:
                 sc_set.add(name)
     return jsonify({"alpha": ["Alpha", "MP"], "sc": sorted(sc_set)})
+
+
+@app.route("/api/traffic-data")
+def api_traffic_data():
+    business     = request.args.get("business", "LS")
+    day_key      = request.args.get("day", "D0")
+    alpha_filter = request.args.get("alpha", "All")
+    sc_filter    = request.args.get("sc", "All")
+    key = ("traffic", business, day_key, alpha_filter, sc_filter)
+    now = time.time()
+    cached = _aggregate_cache.get(key)
+    if cached and now - cached[0] < AGGREGATE_CACHE_TTL:
+        return jsonify(cached[1])
+    try:
+        result = get_traffic_data(business, day_key, alpha_filter, sc_filter)
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"error": str(e)}), 500
+    if result["rowCount"] > 0:
+        _aggregate_cache[key] = (now, result)
+    return jsonify(result)
+
+
+@app.route("/api/traffic-filter-options")
+def api_traffic_filter_options():
+    business  = request.args.get("business", "LS")
+    target_bu = BUSINESS_SHEET_MAP.get(business, business)
+    try:
+        values = get_funnel_sheet_values(TRAFFIC_SC_CY_TAB, sheet_id=FUNNEL_SHEET_ID)
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"error": str(e)}), 500
+    sc_set = set()
+    if values:
+        col = resolve_traffic_columns([str(h).strip() for h in values[0]])
+        for row in values[1:]:
+            if str(_cell(row, col["bu"])).strip() != target_bu:
+                continue
+            name = str(_cell(row, col.get("sc", -1)) or "").strip()
+            if name and name not in EXCLUDED_SUPER_CATEGORIES:
+                sc_set.add(name)
+    return jsonify({"alpha": ["Alpha", "MP"], "sc": sorted(sc_set)})
+
+
+def _cvp_sheet_values(tab):
+    key = f"cvp::{tab}"
+    now = time.time()
+    cached = _sheet_cache.get(key)
+    if cached and now - cached["ts"] < SHEET_READ_CACHE_TTL:
+        return cached["values"]
+    creds = get_credentials()
+    service = build("sheets", "v4", credentials=creds)
+    result = service.spreadsheets().values().get(
+        spreadsheetId=CVP_SHEET_ID, range=f"'{tab}'"
+    ).execute()
+    values = result.get("values", [])
+    _sheet_cache[key] = {"ts": now, "values": values}
+    return values
+
+
+NB_HOURLY_TAB = "NB_Hourly_Raw"
+
+
+def _nb_sheet_values():
+    key = f"cvp::{NB_HOURLY_TAB}"
+    now = time.time()
+    cached = _sheet_cache.get(key)
+    if cached and now - cached["ts"] < SHEET_READ_CACHE_TTL:
+        return cached["values"]
+    creds = get_credentials()
+    service = build("sheets", "v4", credentials=creds)
+    result = service.spreadsheets().values().get(
+        spreadsheetId=CVP_SHEET_ID, range=f"'{NB_HOURLY_TAB}'"
+    ).execute()
+    values = result.get("values", [])
+    _sheet_cache[key] = {"ts": now, "values": values}
+    return values
+
+
+def _nb_resolve_col(header):
+    def idx(name): return header.index(name) if name in header else -1
+    return {
+        "bu":   idx("bu"),
+        "sc":   idx("super_category"),
+        "hour": idx("hour"),
+        "ppvs": idx("ppvs"),
+        "nb":   idx("NB_PPVS"),
+        "ns":   idx("NS"),
+        "oos":  idx("OOS"),
+    }
+
+
+def _nb_agg_rows(values, col, target_bu, hour_limit=None, sc_filter=None):
+    totals = {"ppvs": 0, "nb": 0, "ns": 0, "oos": 0}
+    by_hour = {}
+    sc_data = {}
+    for row in values[1:]:
+        max_col = max(col["ppvs"], col["nb"], col["ns"], col["oos"], col["bu"])
+        if len(row) <= max_col: continue
+        if str(row[col["bu"]]).strip() != target_bu: continue
+        sc_name = str(row[col["sc"]] if col["sc"] >= 0 and len(row) > col["sc"] else "").strip()
+        if sc_name in EXCLUDED_SUPER_CATEGORIES: continue
+        if sc_filter and sc_name != sc_filter: continue
+        try:
+            hr = int(row[col["hour"]]) if col["hour"] >= 0 and len(row) > col["hour"] else 0
+            if hour_limit is not None and hr >= hour_limit: continue
+            ppvs = float(row[col["ppvs"]] or 0)
+            nb   = float(row[col["nb"]]   or 0)
+            ns   = float(row[col["ns"]]   or 0)
+            oos  = float(row[col["oos"]]  or 0)
+        except (ValueError, IndexError):
+            continue
+        for k, v in [("ppvs", ppvs), ("nb", nb), ("ns", ns), ("oos", oos)]:
+            totals[k] += v
+        oh = by_hour.setdefault(hr, {"ppvs": 0, "nb": 0, "ns": 0, "oos": 0})
+        oh["ppvs"] += ppvs; oh["nb"] += nb; oh["ns"] += ns; oh["oos"] += oos
+        if sc_name:
+            sd = sc_data.setdefault(sc_name, {"ppvs": 0, "nb": 0, "ns": 0, "oos": 0})
+            sd["ppvs"] += ppvs; sd["nb"] += nb; sd["ns"] += ns; sd["oos"] += oos
+
+    def metrics(d):
+        ppvs = d["ppvs"]
+        return {
+            "nsPct":  (d["ns"]  / ppvs) if ppvs else None,
+            "nbPct":  (d["nb"]  / ppvs) if ppvs else None,
+            "oosPct": (d["oos"] / ppvs) if ppvs else None,
+            "ppvs":   ppvs,
+        }
+
+    hourly = [dict({"hour": h}, **metrics(by_hour[h])) for h in sorted(by_hour)]
+    sc_rows = sorted(
+        [dict({"name": n}, **metrics(v)) for n, v in sc_data.items()],
+        key=lambda r: -(r["oosPct"] or 0)
+    )
+    return {"totals": metrics(totals), "hourly": hourly, "superCategories": sc_rows}
+
+
+def _cvp_resolve_col(header):
+    def idx(name): return header.index(name) if name in header else -1
+    return {
+        "bu":     idx("analytic_business_unit"),
+        "sc":     idx("analytic_super_category"),
+        "hour":   idx("hour_of_day"),
+        "ip_cur": idx("ip_cur_asp"), "ip_bau": idx("ip_bau_asp"),
+        "op_cur": idx("op_cur_asp"), "op_bau": idx("op_bau_asp"),
+    }
+
+
+def _cvp_agg_rows(values, col, target_bu, hour_limit=None, sc_filter=None):
+    """Aggregate CY or LY CVP rows — returns totals, hourly series, and SC breakdown."""
+    totals = {"ip_cur": 0, "ip_bau": 0, "op_cur": 0, "op_bau": 0}
+    by_hour = {}
+    sc_data = {}
+    for row in values[1:]:
+        if len(row) <= col["op_bau"]: continue
+        if str(row[col["bu"]]).strip() != target_bu: continue
+        sc_name = str(row[col["sc"]] if col["sc"] >= 0 and len(row) > col["sc"] else "").strip()
+        if sc_name in EXCLUDED_SUPER_CATEGORIES: continue
+        if sc_filter and sc_name != sc_filter: continue
+        try:
+            hr = int(row[col["hour"]]) if col["hour"] >= 0 and len(row) > col["hour"] else 0
+            if hour_limit is not None and hr >= hour_limit: continue
+            ip_cur = float(row[col["ip_cur"]] or 0)
+            ip_bau = float(row[col["ip_bau"]] or 0)
+            op_cur = float(row[col["op_cur"]] or 0)
+            op_bau = float(row[col["op_bau"]] or 0)
+        except (ValueError, IndexError):
+            continue
+        for k, v in [("ip_cur", ip_cur), ("ip_bau", ip_bau), ("op_cur", op_cur), ("op_bau", op_bau)]:
+            totals[k] += v
+        oh = by_hour.setdefault(hr, {"ip_cur": 0, "ip_bau": 0, "op_cur": 0, "op_bau": 0})
+        oh["ip_cur"] += ip_cur; oh["ip_bau"] += ip_bau
+        oh["op_cur"] += op_cur; oh["op_bau"] += op_bau
+        if sc_name:
+            sd = sc_data.setdefault(sc_name, {"ip_cur": 0, "ip_bau": 0, "op_cur": 0, "op_bau": 0})
+            sd["ip_cur"] += ip_cur; sd["ip_bau"] += ip_bau
+            sd["op_cur"] += op_cur; sd["op_bau"] += op_bau
+
+    def metrics(d):
+        op = (d["op_cur"] / d["op_bau"] - 1) if d["op_bau"] else None
+        ip = (d["ip_cur"] / d["ip_bau"] - 1) if d["ip_bau"] else None
+        return {"outputPriceDrop": op, "inputPriceDrop": ip}
+
+    hourly = [dict({"hour": h}, **metrics(by_hour[h])) for h in sorted(by_hour)]
+    sc_rows = sorted(
+        [dict({"name": n}, **metrics(v)) for n, v in sc_data.items()],
+        key=lambda r: -(abs(r["outputPriceDrop"] or 0))
+    )
+    return {"totals": metrics(totals), "hourly": hourly, "superCategories": sc_rows, "rowCount": len(by_hour)}
+
+
+def get_cvp_data(business_key, sc_filter="All"):
+    target_bu  = BUSINESS_SHEET_MAP.get(business_key, business_key)
+    sc_filter_val = sc_filter if sc_filter and sc_filter != "All" else None
+
+    cy_values = _cvp_sheet_values(CVP_CY_TAB)
+    ly_values = _cvp_sheet_values(CVP_LY_TAB)
+
+    if not cy_values:
+        return {"business": business_key, "cy": None, "ly": None,
+                "hourly": [], "superCategories": [], "lyHourly": []}
+
+    cy_col = _cvp_resolve_col([str(h).strip() for h in cy_values[0]])
+    cy = _cvp_agg_rows(cy_values, cy_col, target_bu, sc_filter=sc_filter_val)
+
+    ly = None
+    ly_hourly = []
+    if ly_values:
+        ly_col = _cvp_resolve_col([str(h).strip() for h in ly_values[0]])
+        ly_agg = _cvp_agg_rows(ly_values, ly_col, target_bu, sc_filter=sc_filter_val)
+        ly = ly_agg["totals"]
+        ly_hourly = ly_agg["hourly"]
+
+    # SC-level LY matched by name
+    sc_ly_by_name = {}
+    if ly_values:
+        ly_col2 = _cvp_resolve_col([str(h).strip() for h in ly_values[0]])
+        ly_sc = _cvp_agg_rows(ly_values, ly_col2, target_bu)
+        sc_ly_by_name = {r["name"]: r for r in ly_sc["superCategories"]}
+    for r in cy["superCategories"]:
+        r["ly"] = sc_ly_by_name.get(r["name"])
+
+    # NB / NS / OOS metrics from NB_Hourly_Raw
+    nb_values = _nb_sheet_values()
+    nb_data = {"totals": None, "hourly": [], "superCategories": []}
+    if nb_values:
+        nb_col = _nb_resolve_col([str(h).strip() for h in nb_values[0]])
+        nb_agg = _nb_agg_rows(nb_values, nb_col, target_bu, sc_filter=sc_filter_val)
+        nb_data = nb_agg
+        # Merge NB metrics into CVP SC rows by name
+        nb_sc_by_name = {r["name"]: r for r in nb_agg["superCategories"]}
+        for r in cy["superCategories"]:
+            r["nb"] = nb_sc_by_name.get(r["name"])
+
+    # SC filter options
+    sc_set = sorted({r["name"] for r in cy["superCategories"]})
+
+    return {
+        "business": business_key, "cy": cy["totals"], "ly": ly,
+        "hourly": cy["hourly"], "lyHourly": ly_hourly,
+        "superCategories": cy["superCategories"],
+        "filterOptions": {"sc": sc_set},
+        "rowCount": cy["rowCount"],
+        "nb": nb_data["totals"],
+        "nbHourly": nb_data["hourly"],
+    }
+
+
+@app.route("/api/cvp-data")
+def api_cvp_data():
+    business  = request.args.get("business", "LS")
+    sc_filter = request.args.get("sc", "All")
+    key = ("cvp", business, sc_filter)
+    now = time.time()
+    cached = _aggregate_cache.get(key)
+    if cached and now - cached[0] < AGGREGATE_CACHE_TTL:
+        return jsonify(cached[1])
+    try:
+        result = get_cvp_data(business, sc_filter)
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"error": str(e)}), 500
+    if result.get("cy"):
+        _aggregate_cache[key] = (now, result)
+    return jsonify(result)
 
 
 @app.route("/api/filter-options")
@@ -1054,6 +2011,26 @@ def api_sales_debug():
 
 
 # ---- serve the same static frontend as the plain python http.server did ----
+@app.route("/api/insights", methods=["POST"])
+def api_insights():
+    try:
+        import anthropic as _anthropic
+        body = request.get_json(force=True) or {}
+        prompt = body.get("prompt", "")
+        if not prompt:
+            return jsonify({"error": "empty prompt"}), 400
+        client = _anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from env
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=512,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = msg.content[0].text if msg.content else ""
+        return jsonify({"text": text})
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/")
 def index():
     return send_from_directory(ROOT, "index.html")

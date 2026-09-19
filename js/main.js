@@ -11,13 +11,28 @@ function fmtVal(v, unit, decimals){
   const d = decimals !== undefined ? decimals : (unit === "idx" ? 1 : unit === "rs" ? 0 : 2);
   const n = Number(v).toFixed(d).replace(/\.0+$/, "").replace(/(\.\d*[1-9])0+$/, "$1");
   switch(unit){
-    case "rs_cr": return `₹${n} Cr`;
-    case "cr": return `${n} Cr`;
-    case "l": return `${n} L`;
-    case "m": return `${n} M`;
-    case "rs": return `₹${Math.round(v)}`;
-    case "pct": return `${n}%`;
-    case "idx": return `${n}`;
+    case "rs_cr": return `${n} Cr`;   // GMV: value already in Cr, no ₹
+    case "cr":    return `${n} Cr`;
+    case "l":     return `${n} Lac`;
+    case "m":     return `${n} M`;
+    case "rs":    return `${Math.round(v)}`;   // ASP: plain number
+    case "pct":   return `${n}%`;
+    case "idx":   return `${n}`;
+    // Smart GMV: auto-scale Cr → L → K based on magnitude (value in Cr)
+    case "gmv_auto": {
+      const cr = Number(v);
+      if(cr >= 1)  return `${cr.toFixed(decimals !== undefined ? decimals : 2).replace(/\.?0+$/,"")} Cr`;
+      const lac = cr * 100;
+      if(lac >= 1) return `${lac.toFixed(decimals !== undefined ? decimals : 2).replace(/\.?0+$/,"")} L`;
+      return `${(lac * 100).toFixed(0)} K`;
+    }
+    // Smart Units: auto-scale Lac → K (value in Lac)
+    case "units_auto": {
+      const lac = Number(v);
+      if(lac >= 1) return `${lac.toFixed(decimals !== undefined ? decimals : 2).replace(/\.?0+$/,"")} Lac`;
+      const k = lac * 100;
+      return `${k.toFixed(decimals !== undefined ? decimals : 1).replace(/\.?0+$/,"")}K`;
+    }
     default: return `${n}`;
   }
 }
@@ -193,7 +208,10 @@ function renderBusinessSwitcher(){
       LIVE_FILTERS = { marketplace: "All", branded: "All", alpha: "All", pricePoint: "All", sc: "All" }; // filter values (e.g. price buckets) are business-specific
       LIVE_DAY = "D0";
       FUNNEL_DAY = "D0";
-      FUNNEL_FILTERS = { alpha: "All", sc: "All" };
+      TRAFFIC_DAY = "D0";
+      FUNNEL_FILTERS  = { alpha: "All", sc: "All" };
+      TRAFFIC_FILTERS = { alpha: "All", sc: "All" };
+      CVP_FILTERS     = { sc: "All" };
       renderNavAndPages(activePageId);
     });
   });
@@ -260,6 +278,9 @@ const BACKEND_ROUTES = {
   getFilterOptions: business => `/api/filter-options?business=${encodeURIComponent(business)}`,
   getFunnelData: (business, day, filters) => `/api/funnel-data?${new URLSearchParams(Object.assign({ business, day }, filters || {})).toString()}`,
   getFunnelFilterOptions: business => `/api/funnel-filter-options?business=${encodeURIComponent(business)}`,
+  getTrafficData: (business, day, filters) => `/api/traffic-data?${new URLSearchParams(Object.assign({ business, day }, filters || {})).toString()}`,
+  getTrafficFilterOptions: business => `/api/traffic-filter-options?business=${encodeURIComponent(business)}`,
+  getCvpData: (business, filters) => `/api/cvp-data?${new URLSearchParams(Object.assign({ business }, filters || {})).toString()}`,
 };
 function callBackend(fnName, args, onSuccess, onError){
   if(typeof google !== "undefined" && google.script && google.script.run){
@@ -337,7 +358,6 @@ function renderLiveSalesDebug(info){
 const LIVE_SALES_METRICS = [
   { key: "gmv", label: "GMV", unit: "rs_cr", pick: h => h.gmv / 1e7 },
   { key: "units", label: "Units", unit: "l", pick: h => h.units / 1e5 },
-  { key: "asp", label: "ASP", unit: "rs", pick: h => (h.units ? h.gmv / h.units : null) },
 ];
 
 /* Real filters, matching the sheet's own columns — applied server-side. */
@@ -353,6 +373,29 @@ let LIVE_DAY = "D0";
 const FUNNEL_FILTER_KEYS = ["alpha", "sc"];
 const FUNNEL_FILTER_LABELS = { alpha: "Alpha/MP", sc: "Super Category" };
 let FUNNEL_FILTERS = { alpha: "All", sc: "All" };
+
+/* Live Today > Traffic — same grain logic as Funnel (CY only for now). */
+const TRAFFIC_FILTER_KEYS   = ["alpha", "sc"];
+const TRAFFIC_FILTER_LABELS = { alpha: "Alpha/MP", sc: "Super Category" };
+let TRAFFIC_FILTERS = { alpha: "All", sc: "All" };
+let TRAFFIC_DAY = "D0";
+
+const TRAFFIC_KPI_METRICS = [
+  { key: "visits",   label: "Visits",          unit: "m" },
+  { key: "direct",   label: "Direct Visits",   unit: "m" },
+  { key: "indirect", label: "Indirect Visits",  unit: "m" },
+  { key: "search",   label: "Search",           unit: "m" },
+  { key: "merch",    label: "Merch",            unit: "m" },
+  { key: "reco",     label: "Reco",             unit: "m" },
+  { key: "crm",      label: "CRM",              unit: "m" },
+  { key: "perf",     label: "Perf",             unit: "m" },
+  { key: "pn",       label: "PN",               unit: "m" },
+];
+/* Chart metric list — raw additive series only (no derived ratios for traffic). */
+const TRAFFIC_CHART_METRICS = TRAFFIC_KPI_METRICS.map(m => ({
+  key: m.key, label: m.label, unit: m.unit, type: "raw",
+  pick: h => (h[m.key] || 0) / 1e6,
+}));
 
 const FUNNEL_METRICS = [
   { key: "visits", label: "Visits", unit: "m", type: "raw", pick: h => h.visits / 1e6 },
@@ -407,9 +450,11 @@ function spikeBadge(label, spike){
   return `<div class="spike-line">${label} <span class="${cls}">${spike.toFixed(2)}x</span> BAU</div>`;
 }
 
+let _lastFilterOpts = {};
 function populateLiveFilterOptions(){
   callBackend("getFilterOptions", [CURRENT_BUSINESS], opts => {
     if(!opts || opts.error) return;
+    _lastFilterOpts = opts;
     LIVE_FILTER_KEYS.forEach(key => {
       const sel = document.getElementById(`liveFilter-${key}`);
       if(!sel) return;
@@ -418,7 +463,30 @@ function populateLiveFilterOptions(){
         values.map(v => `<option value="${escapeHtml(v)}" ${LIVE_FILTERS[key]===v?"selected":""}>${escapeHtml(v)}</option>`).join("");
       sel.onchange = () => { LIVE_FILTERS[key] = sel.value; hydrateLiveSales(); };
     });
-  }, () => { /* filter options are a nice-to-have; ignore failures silently */ });
+    // also populate breakdown filter dropdowns
+    ["seg","mc","sc"].forEach(ns => {
+      BREAKDOWN_FILTER_KEYS.forEach(k => {
+        const sel2 = document.getElementById(`bdf-${ns}-${k}`);
+        if(!sel2) return;
+        const values = opts[k] || [];
+        sel2.innerHTML = `<option value="All">${BREAKDOWN_FILTER_LABELS[k]}: All</option>` +
+          values.map(v => `<option value="${escapeHtml(v)}" ${BREAKDOWN_FILTERS[k]===v?"selected":""}>${escapeHtml(v)}</option>`).join("");
+        sel2.value = BREAKDOWN_FILTERS[k];
+        sel2.onchange = () => {
+          BREAKDOWN_FILTERS[k] = sel2.value;
+          LIVE_FILTERS[k] = sel2.value;
+          // sync sibling namespaces + top filter bar
+          ["seg","mc","sc"].forEach(n2 => {
+            const s2 = document.getElementById(`bdf-${n2}-${k}`);
+            if(s2 && s2 !== sel2) s2.value = sel2.value;
+          });
+          const top = document.getElementById(`liveFilter-${k}`);
+          if(top) top.value = sel2.value;
+          hydrateLiveSales();
+        };
+      });
+    });
+  }, () => { /* ignore silently */ });
 }
 
 function populateLiveDaySelect(days, selectedDay){
@@ -450,30 +518,73 @@ function renderLiveKpiCards(targetId, agg, ly){
   `;
 }
 
-/* Segment breakdown table: business-specific top rows (Apparel/Non-Apparel for
-   LS, Alpha/MP for others) with GMV and Units each shown as CY / LY / YoY.
-   Each top row expands (click the ▸) into its Alpha/MP (or Branded/Unbranded)
-   children without cluttering the default view. */
+/* 3-level segment breakdown: segment → Alpha/BMP/UMP → price point.
+   Level 0 = top (segment), level 1 = child (seller type), level 2 = grandchild (price point). */
 function renderLiveTable(targetId, agg){
   const rows = agg.breakdown || [];
   const cell = (cy, ly, unit) => {
     const yoy = ly ? yoyPct(cy, ly) : null;
     return `<td>${fmtVal(cy, unit)}</td><td>${ly ? fmtVal(ly, unit) : "—"}</td>${yoyCell(yoy)}`;
   };
-  const rowHtml = (r, parentIdx) => `
-    <tr class="${parentIdx===null ? "seg-parent" : "seg-child hidden"}" ${parentIdx===null ? "" : `data-parent="${parentIdx}"`}>
-      <td>${parentIdx===null ? `<span class="seg-toggle">▸</span>` : ""}${escapeHtml(r.label)}</td>
-      ${cell(r.tyGmv / 1e7, r.lyGmv / 1e7, "rs_cr")}${spikeCell(r.cyGmvSpike)}${spikeCell(r.lyGmvSpike)}
-      ${cell(r.tyUnits / 1e5, r.lyUnits / 1e5, "l")}${spikeCell(r.cyUnitsSpike)}${spikeCell(r.lyUnitsSpike)}
-    </tr>`;
+
   const tbody = document.getElementById(targetId);
-  tbody.innerHTML = rows.map((r, i) => rowHtml(r, null) + (r.children || []).map(c => rowHtml(c, i)).join("")).join("");
-  tbody.querySelectorAll(".seg-parent").forEach((tr, i) => {
-    const toggle = tr.querySelector(".seg-toggle");
-    tr.addEventListener("click", () => {
-      const expanded = toggle.textContent === "▾";
-      toggle.textContent = expanded ? "▸" : "▾";
-      tbody.querySelectorAll(`tr[data-parent="${i}"]`).forEach(child => child.classList.toggle("hidden", expanded));
+  let html = "";
+  let rowIdx = 0;
+
+  rows.forEach((r, pi) => {
+    const parentKey = `p${pi}`;
+    html += `<tr class="seg-parent" data-key="${parentKey}">
+      <td><span class="seg-toggle">▸</span><b>${escapeHtml(r.label)}</b></td>
+      ${cell(r.tyGmv/1e7, r.lyGmv/1e7, "rs_cr")}${spikeCell(r.cyGmvSpike)}${spikeCell(r.lyGmvSpike)}
+      ${cell(r.tyUnits/1e5, r.lyUnits/1e5, "l")}${spikeCell(r.cyUnitsSpike)}${spikeCell(r.lyUnitsSpike)}
+    </tr>`;
+
+    (r.children || []).forEach((c, ci) => {
+      const childKey = `${parentKey}-c${ci}`;
+      html += `<tr class="seg-child seg-l1 hidden" data-parent-key="${parentKey}" data-key="${childKey}">
+        <td><span class="seg-toggle">▸</span>${escapeHtml(c.label)}</td>
+        ${cell(c.tyGmv/1e7, c.lyGmv/1e7, "rs_cr")}${spikeCell(c.cyGmvSpike)}${spikeCell(c.lyGmvSpike)}
+        ${cell(c.tyUnits/1e5, c.lyUnits/1e5, "l")}${spikeCell(c.cyUnitsSpike)}${spikeCell(c.lyUnitsSpike)}
+      </tr>`;
+
+      (c.children || []).forEach((g, gi) => {
+        html += `<tr class="seg-child seg-l2 hidden" data-parent-key="${childKey}">
+          <td>${escapeHtml(g.label)}</td>
+          ${cell(g.tyGmv/1e7, g.lyGmv/1e7, "gmv_auto")}${spikeCell(g.cyGmvSpike)}${spikeCell(g.lyGmvSpike)}
+          ${cell(g.tyUnits/1e5, g.lyUnits/1e5, "units_auto")}${spikeCell(g.cyUnitsSpike)}${spikeCell(g.lyUnitsSpike)}
+        </tr>`;
+      });
+    });
+  });
+
+  tbody.innerHTML = html;
+
+  // Level-0 toggle: show/hide direct L1 children (click anywhere on row)
+  tbody.querySelectorAll(".seg-parent").forEach(tr => {
+    tr.addEventListener("click", e => {
+      const key = tr.dataset.key;
+      const toggle = tr.querySelector(".seg-toggle");
+      const expanding = toggle.textContent === "▸";
+      toggle.textContent = expanding ? "▾" : "▸";
+      tbody.querySelectorAll(`tr[data-parent-key="${key}"]`).forEach(child => {
+        child.classList.toggle("hidden", !expanding);
+        // collapse L2 when L1 parent collapses
+        if(!expanding) {
+          child.querySelector(".seg-toggle") && (child.querySelector(".seg-toggle").textContent = "▸");
+          tbody.querySelectorAll(`tr[data-parent-key="${child.dataset.key}"]`).forEach(g => g.classList.add("hidden"));
+        }
+      });
+    });
+  });
+
+  // Level-1 toggle: show/hide L2 grandchildren (click anywhere on row)
+  tbody.querySelectorAll(".seg-l1").forEach(tr => {
+    tr.addEventListener("click", e => {
+      const key = tr.dataset.key;
+      const toggle = tr.querySelector(".seg-toggle");
+      const expanding = toggle.textContent === "▸";
+      toggle.textContent = expanding ? "▾" : "▸";
+      tbody.querySelectorAll(`tr[data-parent-key="${key}"]`).forEach(g => g.classList.toggle("hidden", !expanding));
     });
   });
 }
@@ -484,10 +595,7 @@ function spikeCell(spike){
   return `<td>${spike===null||spike===undefined?"N/A":spike.toFixed(2)+"x"}</td>`;
 }
 
-/* Same CY/LY/YoY/Spike layout as the segment breakdown table, but one flat
-   row per named group (matched to LY by name) instead of the business
-   segments — shared by the Super Category and (LS-only) Mega Category
-   breakdown tables. */
+/* Named breakdown (MC / SC) — expandable with price point drill-down. */
 function renderNamedBreakdownTable(targetId, agg, fieldName){
   const cell = (cy, ly, unit) => {
     const yoy = ly !== null ? yoyPct(cy, ly) : null;
@@ -496,13 +604,40 @@ function renderNamedBreakdownTable(targetId, agg, fieldName){
   const lyByName = {};
   ((agg.ly && agg.ly[fieldName]) || []).forEach(s => { lyByName[s.name] = s; });
   const rows = agg[fieldName] || [];
-  document.getElementById(targetId).innerHTML = rows.map(r => {
+  const tbody = document.getElementById(targetId);
+  let html = "";
+  rows.forEach((r, i) => {
     const ly = lyByName[r.name] || null;
-    return `<tr><td>${escapeHtml(r.name)}</td>
-      ${cell(r.gmv / 1e7, ly ? ly.gmv / 1e7 : null, "rs_cr")}${spikeCell(r.cyGmvSpike)}${spikeCell(r.lyGmvSpike)}
-      ${cell(r.units / 1e5, ly ? ly.units / 1e5 : null, "l")}${spikeCell(r.cyUnitsSpike)}${spikeCell(r.lyUnitsSpike)}
+    const hasPP = r.pricePoints && r.pricePoints.length > 0;
+    const lyPpByName = {};
+    ((ly && ly.pricePoints) || []).forEach(p => { lyPpByName[p.name] = p; });
+    html += `<tr class="seg-parent" data-key="np${i}" style="cursor:${hasPP?"pointer":"default"}">
+      <td>${hasPP?`<span class="seg-toggle">▸</span>`:""}${escapeHtml(r.name)}</td>
+      ${cell(r.gmv/1e7, ly?ly.gmv/1e7:null,"rs_cr")}${spikeCell(r.cyGmvSpike)}${spikeCell(r.lyGmvSpike)}
+      ${cell(r.units/1e5, ly?ly.units/1e5:null,"l")}${spikeCell(r.cyUnitsSpike)}${spikeCell(r.lyUnitsSpike)}
     </tr>`;
-  }).join("");
+    if(hasPP){
+      r.pricePoints.forEach(pp => {
+        const lyPp = lyPpByName[pp.name] || null;
+        html += `<tr class="seg-child seg-l1 hidden" data-parent-key="np${i}">
+          <td>${escapeHtml(pp.name)}</td>
+          ${cell(pp.gmv/1e7, lyPp?lyPp.gmv/1e7:null,"gmv_auto")}<td>—</td><td>—</td>
+          ${cell(pp.units/1e5, lyPp?lyPp.units/1e5:null,"units_auto")}<td>—</td><td>—</td>
+        </tr>`;
+      });
+    }
+  });
+  tbody.innerHTML = html;
+  tbody.querySelectorAll(".seg-parent").forEach(tr => {
+    if(!tr.querySelector(".seg-toggle")) return;
+    tr.addEventListener("click", () => {
+      const key = tr.dataset.key;
+      const tog = tr.querySelector(".seg-toggle");
+      const expanding = tog.textContent === "▸";
+      tog.textContent = expanding ? "▾" : "▸";
+      tbody.querySelectorAll(`tr[data-parent-key="${key}"]`).forEach(c => c.classList.toggle("hidden", !expanding));
+    });
+  });
 }
 
 /* Running total per contiguous run of real values — hours with no data yet
@@ -547,6 +682,19 @@ function wireLiveChart(selectId, chartId, agg, ly, toggleId, metricsList){
     if(m.type === "ratio"){
       tyData = ratioHourlySeries(agg, m, 24, mode);
       lyData = ly ? ratioHourlySeries(ly, m, 24, mode) : null;
+    } else if(m.key === "asp" && mode === "cumulative"){
+      // ASP cumulative = running sum(gmv) / running sum(units)
+      const aspCumSeries = (source) => {
+        let cumGmv = 0, cumUnits = 0;
+        return Array.from({length: 24}, (_, i) => {
+          const row = source.hourly.find(h => h.hour === i);
+          if(!row) return null;
+          cumGmv += row.gmv || 0; cumUnits += row.units || 0;
+          return cumUnits ? cumGmv / cumUnits : null;
+        });
+      };
+      tyData = aspCumSeries(agg);
+      lyData = ly ? aspCumSeries(ly) : null;
     } else {
       const tyRaw = liveHourlySeries(agg, sel.value, 24, list);
       const lyRaw = ly ? liveHourlySeries(ly, sel.value, 24, list) : null;
@@ -572,6 +720,121 @@ function wireLiveChart(selectId, chartId, agg, ly, toggleId, metricsList){
   paintChart();
 }
 
+/* ---------------- KEY INSIGHTS (LLM-driven) ---------------- */
+function buildInsightsPrompt(data){
+  const ly = data.ly;
+  const totals = liveTotals(data);
+  const lyTotals = ly ? liveTotals(ly) : null;
+  const gmvYoy = lyTotals ? ((totals.gmv - lyTotals.gmv) / lyTotals.gmv * 100).toFixed(1) : null;
+  const unitsYoy = lyTotals ? ((totals.units - lyTotals.units) / lyTotals.units * 100).toFixed(1) : null;
+  const aspYoy = lyTotals ? ((totals.asp - lyTotals.asp) / lyTotals.asp * 100).toFixed(1) : null;
+  const hourStr = data.excludedHour != null ? `00:00–${String(data.excludedHour-1).padStart(2,"00")}:00` : "full day";
+
+  const topSc = (data.superCategories || []).slice(0, 5).map(s => {
+    const lySc = ((ly && ly.superCategories) || []).find(l => l.name === s.name);
+    const yoy = lySc ? ((s.gmv - lySc.gmv) / lySc.gmv * 100).toFixed(1) : null;
+    return `${s.name}: ₹${(s.gmv/1e7).toFixed(2)} Cr${yoy !== null ? ` (${yoy>0?"+":""}${yoy}% YoY)` : ""}`;
+  }).join(", ");
+
+  const topMc = (data.megaCategories || []).slice(0, 4).map(m => {
+    const lyMc = ((ly && ly.megaCategories) || []).find(l => l.name === m.name);
+    const yoy = lyMc ? ((m.gmv - lyMc.gmv) / lyMc.gmv * 100).toFixed(1) : null;
+    return `${m.name}: ₹${(m.gmv/1e7).toFixed(2)} Cr${yoy !== null ? ` (${yoy>0?"+":""}${yoy}% YoY)` : ""}`;
+  }).join(", ");
+
+  const ps = data.paymentShare || {};
+  const lyPs = (ly && ly.paymentShare) || {};
+
+  return `You are a senior e-commerce analytics expert for Flipkart's ${businessLabel()} business unit during the Big Billion Days festive sale.
+
+Current data window: ${fmtSheetDate(data.dateKey)}, ${hourStr} (${data.rowCount} data rows).
+
+OVERALL METRICS:
+- GMV: ${totals.gmv.toFixed(2)} Cr${gmvYoy !== null ? ` | YoY: ${gmvYoy > 0 ? "+" : ""}${gmvYoy}%` : ""}
+- Units: ${totals.units.toFixed(2)} Lac${unitsYoy !== null ? ` | YoY: ${unitsYoy > 0 ? "+" : ""}${unitsYoy}%` : ""}
+- ASP: ${totals.asp ? Math.round(totals.asp) : "N/A"}${aspYoy !== null ? ` | YoY: ${aspYoy > 0 ? "+" : ""}${aspYoy}%` : ""}
+- UPI Share: ${ps.upi != null ? (ps.upi*100).toFixed(1)+"%" : "N/A"}${lyPs.upi != null ? ` (LY: ${(lyPs.upi*100).toFixed(1)}%)` : ""}
+- COD Share: ${ps.cod != null ? (ps.cod*100).toFixed(1)+"%" : "N/A"}${lyPs.cod != null ? ` (LY: ${(lyPs.cod*100).toFixed(1)}%)` : ""}
+
+TOP SUPER CATEGORIES (by GMV): ${topSc || "N/A"}
+TOP MEGA CATEGORIES: ${topMc || "N/A"}
+
+Generate exactly 4 concise, data-driven insights in JSON format. Each insight must:
+- Reference specific numbers from the data
+- Be actionable or diagnostic (not generic)
+- Have a "type": one of "positive", "negative", "neutral", "alert"
+- Have a "title" (5-8 words) and "body" (1-2 sentences, specific)
+
+Respond ONLY with valid JSON array, no markdown, no explanation:
+[{"type":"positive","title":"...","body":"..."},...]`;
+}
+
+function renderInsights(el, insights){
+  const iconMap = { positive:"▲", negative:"▼", neutral:"●", alert:"⚠" };
+  const colorMap = { positive:"var(--green)", negative:"var(--red)", neutral:"var(--blue)", alert:"#f59e0b" };
+  el.innerHTML = `
+    <div style="display:flex;flex-wrap:wrap;gap:8px">
+      ${insights.map(ins => `
+        <div style="flex:1;min-width:200px;max-width:calc(25% - 8px);background:var(--surface2);border-radius:8px;padding:10px 12px;border-left:3px solid ${colorMap[ins.type]||"var(--blue)"}">
+          <div style="font-size:11px;font-weight:700;color:${colorMap[ins.type]||"var(--blue)"};margin-bottom:4px;display:flex;align-items:center;gap:5px">
+            <span>${iconMap[ins.type]||"●"}</span> ${escapeHtml(ins.title||"")}
+          </div>
+          <div style="font-size:12px;line-height:1.5;color:var(--text)">${escapeHtml(ins.body||"")}</div>
+        </div>`).join("")}
+    </div>`;
+}
+
+async function generateInsights(data){
+  const sec = document.getElementById("liveInsightsSection");
+  if(!sec) return;
+  sec.innerHTML = `<div style="display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px;padding:6px 0">
+    <span style="animation:spin 1s linear infinite;display:inline-block">⟳</span> Generating insights…</div>`;
+
+  const prompt = buildInsightsPrompt(data);
+  try {
+    const res = await fetch("/api/insights", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt }),
+    });
+    if(!res.ok) throw new Error("HTTP " + res.status);
+    const j = await res.json();
+    if(j.error) throw new Error(j.error);
+    let insights;
+    try { insights = JSON.parse(j.text); } catch(e) {
+      // try to extract JSON array from text
+      const m = j.text.match(/\[[\s\S]*\]/);
+      insights = m ? JSON.parse(m[0]) : null;
+    }
+    if(!insights || !insights.length) throw new Error("No insights returned");
+    renderInsights(sec, insights);
+  } catch(e) {
+    sec.innerHTML = `<div style="color:var(--muted);font-size:12px;padding:4px 0">⚠ Insights unavailable: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+const BREAKDOWN_FILTER_KEYS = ["marketplace", "branded", "pricePoint", "alpha"];
+const BREAKDOWN_FILTER_LABELS = { marketplace: "Marketplace", branded: "Brand", pricePoint: "Price Point", alpha: "Alpha/MP" };
+let BREAKDOWN_FILTERS = { marketplace: "All", branded: "All", pricePoint: "All", alpha: "All" };
+
+function breakdownTableHtml(title, tbodyId, hourCount, rowLabel, ns){
+  const hourStr = `00:00 → ${String(hourCount-1).padStart(2,"0")}:00`;
+  const filterBar = BREAKDOWN_FILTER_KEYS.map(k =>
+    `<select class="metric-select bdf-sel" data-fkey="${k}" id="bdf-${ns}-${k}"><option value="All">${BREAKDOWN_FILTER_LABELS[k]}: All</option></select>`
+  ).join("");
+  return `<div style="margin-top:10px" class="card">
+    <div class="cardhead"><b>${title} BREAKDOWN — CUMULATIVE TILL HOUR</b><span class="tiny">${hourStr}</span></div>
+    <div class="chipbar" style="margin-top:4px">
+      <span class="cbl">Filter:</span>${filterBar}
+    </div>
+    <div class="table-wrap"><table class="table">
+      <thead><tr><th>${rowLabel}</th><th>GMV CY</th><th>GMV LY</th><th>GMV YoY</th><th>GMV CY Spike</th><th>GMV LY Spike</th><th>Units CY</th><th>Units LY</th><th>Units YoY</th><th>Units CY Spike</th><th>Units LY Spike</th></tr></thead>
+      <tbody id="${tbodyId}"></tbody>
+    </table></div>
+  </div>`;
+}
+
+
 function renderLiveSalesPage(overallData){
   const el = document.getElementById("page-live-sales");
   if(!el) return;
@@ -596,6 +859,8 @@ function renderLiveSalesPage(overallData){
         ${LIVE_FILTER_KEYS.some(k => LIVE_FILTERS[k] !== "All") ? `<div class="chip" id="liveFilterClear" style="color:var(--blue);border-color:var(--blue)">Clear filters</div>` : ""}
       </div>
 
+      <div id="liveInsightsSection" style="margin-top:12px"></div>
+
       <div class="grid g6" id="liveKpiRow" style="margin-top:10px"></div>
     </div>
 
@@ -616,31 +881,9 @@ function renderLiveSalesPage(overallData){
       <div class="legend"><span><i class="dot"></i>${fmtSheetDate(overallData.dateKey)} (This Year)</span>${overallData.ly ? `<span><i class="dot ly"></i>${fmtSheetDate(overallData.ly.dateKey)} (Last Year)</span>` : ""}</div>
     </div>
 
-    <div style="margin-top:10px" class="card">
-      <div class="cardhead"><b>SEGMENT BREAKDOWN — CUMULATIVE TILL HOUR</b><span class="tiny">00:00 → ${String(hourCount-1).padStart(2,"0")}:00</span></div>
-      <div class="table-wrap"><table class="table">
-        <thead><tr><th>Segment</th><th>GMV CY</th><th>GMV LY</th><th>GMV YoY</th><th>GMV CY Spike</th><th>GMV LY Spike</th><th>Units CY</th><th>Units LY</th><th>Units YoY</th><th>Units CY Spike</th><th>Units LY Spike</th></tr></thead>
-        <tbody id="liveTableRows"></tbody>
-      </table></div>
-    </div>
-
-    ${CURRENT_BUSINESS === "LS" ? `
-    <div style="margin-top:10px" class="card">
-      <div class="cardhead"><b>MEGA CATEGORY BREAKDOWN — CUMULATIVE TILL HOUR</b><span class="tiny">00:00 → ${String(hourCount-1).padStart(2,"0")}:00</span></div>
-      <div class="table-wrap"><table class="table">
-        <thead><tr><th>Mega Category</th><th>GMV CY</th><th>GMV LY</th><th>GMV YoY</th><th>GMV CY Spike</th><th>GMV LY Spike</th><th>Units CY</th><th>Units LY</th><th>Units YoY</th><th>Units CY Spike</th><th>Units LY Spike</th></tr></thead>
-        <tbody id="liveMcTableRows"></tbody>
-      </table></div>
-    </div>
-    ` : ""}
-
-    <div style="margin-top:10px" class="card">
-      <div class="cardhead"><b>SUPER CATEGORY BREAKDOWN — CUMULATIVE TILL HOUR</b><span class="tiny">00:00 → ${String(hourCount-1).padStart(2,"0")}:00</span></div>
-      <div class="table-wrap"><table class="table">
-        <thead><tr><th>Super Category</th><th>GMV CY</th><th>GMV LY</th><th>GMV YoY</th><th>GMV CY Spike</th><th>GMV LY Spike</th><th>Units CY</th><th>Units LY</th><th>Units YoY</th><th>Units CY Spike</th><th>Units LY Spike</th></tr></thead>
-        <tbody id="liveScTableRows"></tbody>
-      </table></div>
-    </div>
+    ${breakdownTableHtml("SELLER TYPE", "liveTableRows", hourCount, CURRENT_BUSINESS === "LS" ? "Apparel / Non-Apparel" : "Alpha / MP", "seg")}
+    ${CURRENT_BUSINESS === "LS" ? breakdownTableHtml("MEGA CATEGORY", "liveMcTableRows", hourCount, "Mega Category", "mc") : ""}
+    ${breakdownTableHtml("SUPER CATEGORY", "liveScTableRows", hourCount, "Super Category", "sc")}
 
   `;
 
@@ -658,6 +901,199 @@ function renderLiveSalesPage(overallData){
   if(CURRENT_BUSINESS === "LS") renderNamedBreakdownTable("liveMcTableRows", overallData, "megaCategories");
   renderNamedBreakdownTable("liveScTableRows", overallData, "superCategories");
   wireLiveChart("liveMetricSelect", "liveChart", overallData, overallData.ly, "liveChartMode");
+  generateInsights(overallData);
+}
+
+/* ============================================================
+   EVENT SUMMARY — SALES (daily trend across entire BBD event)
+   Mirrors Live Sales but uses Daily_sales_2026/2025 tabs and
+   shows a day-by-day trend chart instead of hourly.
+   ============================================================ */
+let SUMMARY_FILTERS = { marketplace: "All", branded: "All", alpha: "All", pricePoint: "All", sc: "All" };
+
+function dailySeries(data, key){
+  /* Returns [{label, value}] for the trend chart — one point per day */
+  return (data.daily || []).map(d => ({
+    label: fmtSheetDate(d.day),
+    value: key === "gmv" ? d.gmv / 1e7 : key === "units" ? d.units / 1e5 : null,
+  }));
+}
+
+
+function breakdownDailyTableHtml(title, tbodyId, rowLabel, ns){
+  const filterBar = BREAKDOWN_FILTER_KEYS.map(k =>
+    `<select class="metric-select bdf-sel" data-fkey="${k}" id="sbdf-${ns}-${k}"><option value="All">${BREAKDOWN_FILTER_LABELS[k]}: All</option></select>`
+  ).join("");
+  return `<div style="margin-top:10px" class="card">
+    <div class="cardhead"><b>${title} BREAKDOWN — FULL EVENT</b></div>
+    <div class="chipbar" style="margin-top:4px">
+      <span class="cbl">Filter:</span>${filterBar}
+    </div>
+    <div class="table-wrap"><table class="table">
+      <thead><tr><th>${rowLabel}</th><th>GMV CY</th><th>GMV LY</th><th>GMV YoY</th><th>GMV CY Spike</th><th>GMV LY Spike</th><th>Units CY</th><th>Units LY</th><th>Units YoY</th><th>Units CY Spike</th><th>Units LY Spike</th></tr></thead>
+      <tbody id="${tbodyId}"></tbody>
+    </table></div>
+  </div>`;
+}
+
+function renderSummaryKpiCards(data){
+  const totals = liveTotals(data);
+  const ly = data.ly;
+  const lyTotals = ly ? liveTotals(ly) : null;
+  const ps = data.paymentShare || {};
+  const lyPs = (ly && ly.paymentShare) || {};
+  const bau = data.bauSpike || {};
+  const gmvSpike = bau.gmv || {}, unitsSpike = bau.units || {};
+  document.getElementById("summaryKpiRow").innerHTML = `
+    <div class="card kpi"><label>GMV</label><div class="value">${fmtVal(totals.gmv,"rs_cr")}</div><div class="statrow">${yoyBadge(lyTotals ? yoyPct(totals.gmv,lyTotals.gmv) : null)}</div><div class="spikerow">${spikeBadge("CY",gmvSpike.cy)}${spikeBadge("LY",gmvSpike.ly)}</div></div>
+    <div class="card kpi"><label>Units</label><div class="value">${fmtVal(totals.units,"l")}</div><div class="statrow">${yoyBadge(lyTotals ? yoyPct(totals.units,lyTotals.units) : null)}</div><div class="spikerow">${spikeBadge("CY",unitsSpike.cy)}${spikeBadge("LY",unitsSpike.ly)}</div></div>
+    <div class="card kpi"><label>ASP</label><div class="value">${fmtVal(totals.asp,"rs")}</div><div class="statrow">${yoyBadge(lyTotals ? yoyPct(totals.asp,lyTotals.asp) : null)}</div></div>
+    <div class="card kpi"><label>UPI Share</label><div class="value">${pct1(ps.upi)}</div><div class="statrow">${ppBadge(ps.upi,lyPs.upi)}</div></div>
+    <div class="card kpi"><label>COD Share</label><div class="value">${pct1(ps.cod)}</div><div class="statrow">${ppBadge(ps.cod,lyPs.cod)}</div></div>
+    <div class="card kpi"><label>PBO Share</label><div class="value">${pct1(ps.pbo)}</div><div class="statrow">${ppBadge(ps.pbo,lyPs.pbo)}</div></div>
+  `;
+}
+
+function renderSummaryTables(data){
+  // Seller Type breakdown (same as live: seg-parent L0, children L1, grandchildren L2)
+  const segTbody = document.getElementById("summarySegRows");
+  if(segTbody) renderLiveTable(segTbody.id, data);
+
+  // SC breakdown
+  const scTbody = document.getElementById("summaryScRows");
+  if(scTbody) renderNamedBreakdownTable(scTbody.id, data, "superCategories");
+
+  // MC breakdown (LS only)
+  const mcTbody = document.getElementById("summaryMcRows");
+  if(mcTbody && CURRENT_BUSINESS === "LS") renderNamedBreakdownTable(mcTbody.id, data, "megaCategories");
+}
+
+function renderSummaryDailyChart(data, metric, mode){
+  const ty = dailySeries(data, metric);
+  const ly = data.ly ? dailySeries(data.ly, metric) : null;
+  const unit = metric === "gmv" ? "rs_cr" : "l";
+  const labels = ty.map(p => p.label);
+  const raw = arr => arr.map(p => p.value);
+  const cum = arr => { let s = 0; return arr.map(p => { s += (p.value || 0); return s; }); };
+  const tyData = mode === "cumulative" ? cum(ty) : raw(ty);
+  const lyData = ly ? (mode === "cumulative" ? cum(ly) : raw(ly)) : null;
+  const mLabel = metric === "gmv" ? "GMV" : "Units";
+  const series = [{ label: `${mLabel} (TY)`, color: "#2563eb", data: tyData }];
+  if(lyData) series.push({ label: `${mLabel} (LY)`, color: "#39a66a", dash: [7,5], data: lyData });
+  const el = document.getElementById("summaryDailyChart");
+  if(!el) return;
+  el.innerHTML = `<div class="chart" id="summaryDailyChartInner" style="height:260px">${svgLineChart(series, labels, unit)}</div>`;
+  attachChartHover("summaryDailyChartInner", series, labels, unit);
+}
+
+function renderSummaryFilterOptions(data){
+  callBackend("getFilterOptions", [CURRENT_BUSINESS], opts => {
+    if(!opts || opts.error) return;
+    LIVE_FILTER_KEYS.forEach(key => {
+      const sel = document.getElementById(`summaryFilter-${key}`);
+      if(!sel) return;
+      const values = opts[key] || [];
+      sel.innerHTML = `<option value="All">${LIVE_FILTER_LABELS[key]}: All</option>` +
+        values.map(v => `<option value="${escapeHtml(v)}" ${SUMMARY_FILTERS[key]===v?"selected":""}>${escapeHtml(v)}</option>`).join("");
+      sel.onchange = () => { SUMMARY_FILTERS[key] = sel.value; hydrateEventSales(); };
+    });
+    BREAKDOWN_FILTER_KEYS.forEach(k => {
+      ["sseg","smc","ssc"].forEach(ns => {
+        const sel2 = document.getElementById(`sbdf-${ns}-${k}`);
+        if(!sel2) return;
+        const values = opts[k] || [];
+        sel2.innerHTML = `<option value="All">${BREAKDOWN_FILTER_LABELS[k]}: All</option>` +
+          values.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join("");
+        sel2.value = SUMMARY_FILTERS[k];
+        sel2.onchange = () => { SUMMARY_FILTERS[k] = sel2.value; hydrateEventSales(); };
+      });
+    });
+  }, () => {});
+}
+
+function renderSummaryPage(data){
+  const el = document.getElementById("page-event-sales");
+  if(!el) return;
+
+  el.innerHTML = `
+    <div class="card">
+      <div class="cardhead">
+        <div><h1>Event Summary — Sales</h1><div class="sub">Daily performance across Big Billion Days · ${data.rowCount} data rows · Daily_sales_2026 / 2025</div></div>
+        <span class="tag ok">${businessLabel()}</span>
+      </div>
+      <div class="chipbar" style="margin-top:4px">
+        <span class="cbl">Filters:</span>
+        ${LIVE_FILTER_KEYS.map(k => `<select class="metric-select" id="summaryFilter-${k}"><option value="All">${LIVE_FILTER_LABELS[k]}: All</option></select>`).join("")}
+      </div>
+      <div class="grid g6" id="summaryKpiRow" style="margin-top:10px"></div>
+    </div>
+
+    <div style="margin-top:10px" class="card">
+      <div class="cardhead">
+        <b>DAILY TREND — OVERALL</b>
+        <div style="display:flex;gap:8px;align-items:center">
+          <div class="chart-mode-toggle" id="summaryChartMode">
+            <button class="active" data-mode="daily">Daily</button>
+            <button data-mode="cumulative">Cumulative</button>
+          </div>
+          <select class="metric-select" id="summaryMetricSelect">
+            <option value="gmv">GMV</option>
+            <option value="units">Units</option>
+          </select>
+        </div>
+      </div>
+      <div id="summaryDailyChart"></div>
+      <div class="legend">
+        <span><i class="dot"></i>This Year (2026)</span>
+        ${data.ly ? `<span><i class="dot ly"></i>Last Year (2025)</span>` : ""}
+      </div>
+    </div>
+
+    ${breakdownDailyTableHtml("SELLER TYPE", "summarySegRows", CURRENT_BUSINESS === "LS" ? "Apparel / Non-Apparel" : "Alpha / MP", "sseg")}
+    ${CURRENT_BUSINESS === "LS" ? breakdownDailyTableHtml("MEGA CATEGORY", "summaryMcRows", "Mega Category", "smc") : ""}
+    ${breakdownDailyTableHtml("SUPER CATEGORY", "summaryScRows", "Super Category", "ssc")}
+  `;
+
+  renderSummaryKpiCards(data);
+  renderSummaryTables(data);
+  let summaryChartMode = "daily";
+  const paintSummaryChart = () => renderSummaryDailyChart(data, document.getElementById("summaryMetricSelect").value, summaryChartMode);
+  paintSummaryChart();
+  renderSummaryFilterOptions(data);
+
+  document.getElementById("summaryMetricSelect").onchange = paintSummaryChart;
+  document.getElementById("summaryChartMode").querySelectorAll("button").forEach(btn => {
+    btn.addEventListener("click", () => {
+      if(btn.dataset.mode === summaryChartMode) return;
+      summaryChartMode = btn.dataset.mode;
+      document.getElementById("summaryChartMode").querySelectorAll("button").forEach(b => b.classList.toggle("active", b === btn));
+      paintSummaryChart();
+    });
+  });
+}
+
+function renderSummaryLoading(){
+  const el = document.getElementById("page-event-sales");
+  if(el) el.innerHTML = `<div class="card"><div class="cardhead"><div><h1>Event Summary — Sales</h1><div class="sub">Daily performance, live from Google Sheet</div></div><span class="tag ok">${businessLabel()}</span><span class="tag warn">⏳ Connecting…</span></div><div class="callout">Loading daily sales data for ${businessLabel()}…</div></div>`;
+}
+
+function hydrateEventSales(){
+  renderSummaryLoading();
+  const params = new URLSearchParams({ business: CURRENT_BUSINESS, ...SUMMARY_FILTERS });
+  fetch(`/api/summary-sales?${params}`)
+    .then(r => r.json())
+    .then(data => {
+      if(!data || data.error || !data.rowCount){
+        const el = document.getElementById("page-event-sales");
+        if(el) el.innerHTML = `<div class="card"><div class="callout">⚠ ${escapeHtml(data && data.error ? data.error : "No daily sales data found. Add Daily_sales_2026 and Daily_sales_2025 tabs to the Sales sheet.")}</div></div>`;
+        return;
+      }
+      renderSummaryPage(data);
+    })
+    .catch(e => {
+      const el = document.getElementById("page-event-sales");
+      if(el) el.innerHTML = `<div class="card"><div class="callout">⚠ Error: ${escapeHtml(e.message)}</div></div>`;
+    });
 }
 
 /* ---------------- LIVE DATA FETCH ---------------- */
@@ -850,6 +1286,621 @@ function hydrateLiveFunnel(){
   });
 }
 
+/* ---------------- LIVE TRAFFIC PAGE (Live Today > Traffic — CY only, LY coming later) ---------------- */
+function renderLiveTrafficLoading(){
+  const el = document.getElementById("page-live-traffic");
+  if(!el) return;
+  el.innerHTML = `
+    <div class="card">
+      <div class="cardhead">
+        <div><h1>Live Today — Traffic</h1><div class="sub">Hourly performance, live from Google Sheet</div></div>
+        <span class="tag ok">${businessLabel()}</span>
+        <span class="tag warn">⏳ Connecting…</span>
+      </div>
+      <div class="callout">Loading live traffic data for ${businessLabel()}…</div>
+    </div>`;
+}
+
+function renderLiveTrafficEmpty(message){
+  const el = document.getElementById("page-live-traffic");
+  if(!el) return;
+  el.innerHTML = `
+    <div class="card">
+      <div class="cardhead">
+        <div><h1>Live Today — Traffic</h1><div class="sub">Hourly performance, live from Google Sheet</div></div>
+        <span class="tag ok">${businessLabel()}</span>
+        <span class="tag bad">⚠ No data</span>
+      </div>
+      <div class="callout" style="white-space:pre-wrap">${escapeHtml(message)}</div>
+    </div>`;
+}
+
+function populateTrafficDaySelect(days, selectedDay){
+  const sel = document.getElementById("trafficDaySelect");
+  if(!sel || !days || !days.length) return;
+  sel.innerHTML = days.map(d => `<option value="${d.key}" ${d.key===selectedDay?"selected":""}>${d.key} (${fmtSheetDate(d.dateKey)})</option>`).join("");
+  sel.onchange = () => { TRAFFIC_DAY = sel.value; hydrateLiveTraffic(); };
+}
+
+function populateTrafficFilterOptions(){
+  callBackend("getTrafficFilterOptions", [CURRENT_BUSINESS], opts => {
+    if(!opts || opts.error) return;
+    TRAFFIC_FILTER_KEYS.forEach(key => {
+      const sel = document.getElementById(`trafficFilter-${key}`);
+      if(!sel) return;
+      const values = opts[key] || [];
+      sel.innerHTML = `<option value="All">${TRAFFIC_FILTER_LABELS[key]}: All</option>` +
+        values.map(v => `<option value="${escapeHtml(v)}" ${TRAFFIC_FILTERS[key]===v?"selected":""}>${escapeHtml(v)}</option>`).join("");
+      sel.onchange = () => { TRAFFIC_FILTERS[key] = sel.value; hydrateLiveTraffic(); };
+    });
+  }, () => {});
+}
+
+function renderTrafficKpiCards(targetId, totals, lyTotals){
+  document.getElementById(targetId).innerHTML = TRAFFIC_KPI_METRICS.map(m => {
+    const cy = (totals[m.key] || 0) / 1e6;
+    const ly = lyTotals ? (lyTotals[m.key] || 0) / 1e6 : null;
+    const yoy = ly !== null ? yoyPct(cy, ly) : null;
+    return `<div class="card kpi"><label>${m.label}</label><div class="value">${fmtVal(cy, m.unit)}</div><div class="statrow">${yoyBadge(yoy)}</div></div>`;
+  }).join("");
+}
+
+function renderTrafficScTable(targetId, rows){
+  const hasLy = rows.some(r => r.ly);
+  document.getElementById(targetId).innerHTML = rows.map(r => {
+    const ly = r.ly || null;
+    const visYoy = ly ? yoyPct(r.visits, ly.visits) : null;
+    return `<tr>
+      <td>${escapeHtml(r.name)}</td>
+      <td>${fmtVal((r.visits||0)/1e6,"m")}</td>
+      <td>${ly ? fmtVal((ly.visits||0)/1e6,"m") : "—"}</td>
+      ${yoyCell(visYoy)}
+      <td>${fmtVal((r.direct||0)/1e6,"m")}</td>
+      <td>${fmtVal((r.indirect||0)/1e6,"m")}</td>
+      <td>${fmtVal((r.search||0)/1e6,"m")}</td>
+      <td>${fmtVal((r.merch||0)/1e6,"m")}</td>
+      <td>${fmtVal((r.reco||0)/1e6,"m")}</td>
+      <td>${fmtVal((r.crm||0)/1e6,"m")}</td>
+      <td>${fmtVal((r.perf||0)/1e6,"m")}</td>
+      <td>${fmtVal((r.pn||0)/1e6,"m")}</td>
+    </tr>`;
+  }).join("");
+}
+
+function renderLiveTrafficPage(data){
+  const el = document.getElementById("page-live-traffic");
+  if(!el) return;
+
+  const hourCount = data.excludedHour != null ? data.excludedHour : 24;
+  const hoursSub  = data.excludedHour != null
+    ? `hours 00:00–${String(hourCount-1).padStart(2,"00")}:00 (current hour excluded)`
+    : `all 24 hours (completed day)`;
+
+  el.innerHTML = `
+    <div class="card">
+      <div class="cardhead">
+        <div><h1>Live Today — Traffic</h1><div class="sub">Hourly performance · ${fmtSheetDate(data.dateKey)} · ${hoursSub}</div></div>
+        <span class="tag ok">${businessLabel()}</span>
+      </div>
+
+      <div class="chipbar" style="margin-top:4px">
+        <span class="cbl">Day:</span>
+        <select class="metric-select" id="trafficDaySelect"></select>
+        <span class="cbl" style="margin-left:10px">Filters:</span>
+        ${TRAFFIC_FILTER_KEYS.map(k => `<select class="metric-select" id="trafficFilter-${k}"><option value="All">${TRAFFIC_FILTER_LABELS[k]}: All</option></select>`).join("")}
+        ${TRAFFIC_FILTER_KEYS.some(k => TRAFFIC_FILTERS[k] !== "All") ? `<div class="chip" id="trafficFilterClear" style="color:var(--blue);border-color:var(--blue)">Clear filters</div>` : ""}
+      </div>
+
+      <div class="grid g3" id="trafficKpiRow" style="margin-top:10px"></div>
+    </div>
+
+    <div style="margin-top:10px" class="card">
+      <div class="cardhead">
+        <b>HOURLY TREND</b>
+        <select class="metric-select" id="trafficMetricSelect">
+          ${TRAFFIC_CHART_METRICS.map(m => `<option value="${m.key}">${m.label}</option>`).join("")}
+        </select>
+      </div>
+      <div class="chart" id="trafficChart"></div>
+      <div class="legend"><span><i class="dot"></i>${fmtSheetDate(data.dateKey)} (This Year)</span>${data.ly ? `<span><i class="dot ly"></i>${fmtSheetDate(data.ly.dateKey)} (Last Year)</span>` : ""}</div>
+    </div>
+
+    <div style="margin-top:10px" class="card">
+      <div class="cardhead"><b>SUPER CATEGORY BREAKDOWN</b><span class="tiny">00:00 → ${String(hourCount-1).padStart(2,"00")}:00</span></div>
+      <div class="table-wrap"><table class="table">
+        <thead><tr>
+          <th>Super Category</th><th>Visits CY</th><th>Visits LY</th><th>Visits YoY</th>
+          <th>Direct</th><th>Indirect</th><th>Search</th><th>Merch</th><th>Reco</th><th>CRM</th><th>Perf</th><th>PN</th>
+        </tr></thead>
+        <tbody id="trafficScRows"></tbody>
+      </table></div>
+    </div>
+  `;
+
+  populateTrafficDaySelect(data.days, data.selectedDay);
+  populateTrafficFilterOptions();
+  const clearBtn = document.getElementById("trafficFilterClear");
+  if(clearBtn) clearBtn.addEventListener("click", () => {
+    TRAFFIC_FILTER_KEYS.forEach(k => TRAFFIC_FILTERS[k] = "All");
+    hydrateLiveTraffic();
+  });
+
+  const lyTotals = data.ly ? data.ly.totals : null;
+  renderTrafficKpiCards("trafficKpiRow", data.totals, lyTotals);
+  renderTrafficScTable("trafficScRows", data.superCategories || []);
+  wireLiveChart("trafficMetricSelect", "trafficChart", data, data.ly || null, null, TRAFFIC_CHART_METRICS);
+}
+
+function hydrateLiveTraffic(){
+  renderLiveTrafficLoading();
+  callBackend("getTrafficData", [CURRENT_BUSINESS, TRAFFIC_DAY, TRAFFIC_FILTERS], data => {
+    if(!data || !data.rowCount){
+      renderLiveTrafficEmpty(`No traffic rows found for "${businessLabel()}" (mapped to "${(data && data.sheetBusinessUnit) || "?"}" in the sheet).`);
+      return;
+    }
+    renderLiveTrafficPage(data);
+  }, err => {
+    renderLiveTrafficEmpty("⚠ Live Traffic Sheet error: " + (err && err.message ? err.message : err));
+  });
+}
+
+/* ---------------- CVP INPUTS PAGE (Live Today > CVP Inputs) ---------------- */
+const CVP_PAGE_ID = "live-inputs";
+let CVP_FILTERS = { sc: "All" };
+
+const CVP_CHART_METRICS = [
+  { key: "outputPriceDrop", label: "Output Price Drop", unit: "pct", type: "raw", pick: h => h.outputPriceDrop != null ? h.outputPriceDrop * 100 : null },
+  { key: "inputPriceDrop",  label: "Input Price Drop",  unit: "pct", type: "raw", pick: h => h.inputPriceDrop  != null ? h.inputPriceDrop  * 100 : null },
+  { key: "nsPct",  label: "NS%",  unit: "pct", type: "raw", pick: h => h.nsPct  != null ? h.nsPct  * 100 : null },
+  { key: "nbPct",  label: "NB%",  unit: "pct", type: "raw", pick: h => h.nbPct  != null ? h.nbPct  * 100 : null },
+  { key: "oosPct", label: "OOS%", unit: "pct", type: "raw", pick: h => h.oosPct != null ? h.oosPct * 100 : null },
+];
+
+function cvpDropCard(label, cyVal, lyVal){
+  const fmt  = v => v != null ? (v * 100).toFixed(2) + "%" : "N/A";
+  const delta = (cyVal != null && lyVal != null) ? (cyVal - lyVal) * 100 : null;
+  // for price drop: smaller (more negative) = better = "up" green
+  const cls   = delta === null ? "" : delta <= 0 ? "up" : "down";
+  const badge = delta === null ? "" :
+    `<span class="stat ${cls}">${delta <= 0 ? "▲" : "▼"} ${Math.abs(delta).toFixed(2)}pp YoY</span>`;
+  return `<div class="card kpi"><label>${label}</label><div class="value">${fmt(cyVal)}</div><div class="sub" style="margin-top:2px">LY: ${fmt(lyVal)}</div><div class="statrow">${badge}</div></div>`;
+}
+
+function nbMetricCard(label, val, goodDir="down"){
+  const fmt = v => v != null ? (v * 100).toFixed(2) + "%" : "N/A";
+  return `<div class="card kpi"><label>${label}</label><div class="value">${fmt(val)}</div></div>`;
+}
+
+function populateCvpFilterOptions(opts){
+  const scSel = document.getElementById("cvpFilter-sc");
+  if(!scSel) return;
+  const scs = (opts && opts.sc) || [];
+  scSel.innerHTML = `<option value="All">Super Category: All</option>` +
+    scs.map(v => `<option value="${escapeHtml(v)}" ${CVP_FILTERS.sc===v?"selected":""}>${escapeHtml(v)}</option>`).join("");
+  scSel.onchange = () => { CVP_FILTERS.sc = scSel.value; hydrateCvp(); };
+}
+
+function renderCvpScTable(targetId, rows){
+  document.getElementById(targetId).innerHTML = rows.map(r => {
+    const ly = r.ly || null;
+    const nb = r.nb || null;
+    const opDelta = (r.outputPriceDrop != null && ly && ly.outputPriceDrop != null) ? (r.outputPriceDrop - ly.outputPriceDrop) * 100 : null;
+    const ipDelta = (r.inputPriceDrop  != null && ly && ly.inputPriceDrop  != null) ? (r.inputPriceDrop  - ly.inputPriceDrop)  * 100 : null;
+    const ppCell = (cy, lyv, delta) => {
+      const cls = delta === null ? "" : delta <= 0 ? "up" : "down";
+      return `<td>${cy != null ? (cy*100).toFixed(2)+"%" : "N/A"}</td><td>${lyv != null ? (lyv*100).toFixed(2)+"%" : "—"}</td><td class="${cls}">${delta === null ? "N/A" : (delta<=0?"▲":"▼")+" "+Math.abs(delta).toFixed(2)+"pp"}</td>`;
+    };
+    const pctCell = v => `<td>${v != null ? (v*100).toFixed(2)+"%" : "—"}</td>`;
+    return `<tr><td>${escapeHtml(r.name)}</td>
+      ${ppCell(r.outputPriceDrop, ly ? ly.outputPriceDrop : null, opDelta)}
+      ${ppCell(r.inputPriceDrop,  ly ? ly.inputPriceDrop  : null, ipDelta)}
+      ${pctCell(nb ? nb.nsPct  : null)}
+      ${pctCell(nb ? nb.nbPct  : null)}
+      ${pctCell(nb ? nb.oosPct : null)}
+    </tr>`;
+  }).join("");
+}
+
+function renderCvpPage(data){
+  const el = document.getElementById("page-live-inputs");
+  if(!el) return;
+  const cy = data.cy || {};
+  const ly = data.ly || {};
+  const nb = data.nb || {};
+
+  el.innerHTML = `
+    <div class="card">
+      <div class="cardhead">
+        <div><h1>Live Today — CVP Inputs</h1><div class="sub">Price drop · NB/NS/OOS metrics · cumulative D0</div></div>
+        <span class="tag ok">${businessLabel()}</span>
+      </div>
+      <div class="chipbar" style="margin-top:4px">
+        <span class="cbl">Filters:</span>
+        <select class="metric-select" id="cvpFilter-sc"><option value="All">Super Category: All</option></select>
+        ${CVP_FILTERS.sc !== "All" ? `<div class="chip" id="cvpFilterClear" style="color:var(--blue);border-color:var(--blue)">Clear filters</div>` : ""}
+      </div>
+      <div class="grid g3" style="margin-top:10px">
+        ${cvpDropCard("Output Price Drop", cy.outputPriceDrop, ly.outputPriceDrop)}
+        ${cvpDropCard("Input Price Drop",  cy.inputPriceDrop,  ly.inputPriceDrop)}
+      </div>
+      <div class="grid g3" style="margin-top:8px">
+        ${nbMetricCard("NS%",  nb.nsPct)}
+        ${nbMetricCard("NB%",  nb.nbPct)}
+        ${nbMetricCard("OOS%", nb.oosPct)}
+      </div>
+    </div>
+
+    <div style="margin-top:10px" class="card">
+      <div class="cardhead">
+        <b>HOURLY TREND</b>
+        <select class="metric-select" id="cvpMetricSelect">
+          ${CVP_CHART_METRICS.map(m => `<option value="${m.key}">${m.label}</option>`).join("")}
+        </select>
+      </div>
+      <div class="chart" id="cvpChart"></div>
+      <div class="legend">
+        <span><i class="dot"></i>CY</span>
+        ${data.lyHourly && data.lyHourly.length ? `<span><i class="dot ly"></i>LY</span>` : ""}
+      </div>
+    </div>
+
+    <div style="margin-top:10px" class="card">
+      <div class="cardhead"><b>SUPER CATEGORY BREAKDOWN</b></div>
+      <div class="table-wrap"><table class="table">
+        <thead><tr>
+          <th>Super Category</th>
+          <th>Output Drop CY</th><th>Output Drop LY</th><th>Output Drop YoY</th>
+          <th>Input Drop CY</th><th>Input Drop LY</th><th>Input Drop YoY</th>
+          <th>NS%</th><th>NB%</th><th>OOS%</th>
+        </tr></thead>
+        <tbody id="cvpScRows"></tbody>
+      </table></div>
+    </div>
+  `;
+
+  populateCvpFilterOptions(data.filterOptions);
+  const clearBtn = document.getElementById("cvpFilterClear");
+  if(clearBtn) clearBtn.addEventListener("click", () => { CVP_FILTERS.sc = "All"; hydrateCvp(); });
+
+  renderCvpScTable("cvpScRows", data.superCategories || []);
+
+  // Merge NB hourly into combined hourly keyed by hour
+  const nbByHour = {};
+  (data.nbHourly || []).forEach(h => { nbByHour[h.hour] = h; });
+  const mergedHourly = (data.hourly || []).map(h => ({
+    ...h,
+    nsPct:  nbByHour[h.hour] ? nbByHour[h.hour].nsPct  : null,
+    nbPct:  nbByHour[h.hour] ? nbByHour[h.hour].nbPct  : null,
+    oosPct: nbByHour[h.hour] ? nbByHour[h.hour].oosPct : null,
+  }));
+  // Also include NB-only hours not in CVP hourly
+  (data.nbHourly || []).forEach(h => {
+    if(!mergedHourly.find(m => m.hour === h.hour))
+      mergedHourly.push({ hour: h.hour, nsPct: h.nsPct, nbPct: h.nbPct, oosPct: h.oosPct });
+  });
+  mergedHourly.sort((a,b) => a.hour - b.hour);
+
+  const cyAgg  = { hourly: mergedHourly };
+  const lyAgg  = data.lyHourly && data.lyHourly.length
+    ? { hourly: data.lyHourly.map(h => ({ hour: h.hour, outputPriceDrop: h.outputPriceDrop, inputPriceDrop: h.inputPriceDrop })) }
+    : null;
+  wireLiveChart("cvpMetricSelect", "cvpChart", cyAgg, lyAgg, null, CVP_CHART_METRICS);
+}
+
+function hydrateCvp(){
+  const el = document.getElementById("page-live-inputs");
+  if(!el) return;
+  el.innerHTML = `<div class="card"><div class="cardhead"><div><h1>Live Today — CVP Inputs</h1></div><span class="tag ok">${businessLabel()}</span><span class="tag warn">⏳ Connecting…</span></div><div class="callout">Loading…</div></div>`;
+  callBackend("getCvpData", [CURRENT_BUSINESS, CVP_FILTERS], data => {
+    if(!data || data.error){
+      el.innerHTML = `<div class="card"><div class="cardhead"><div><h1>Live Today — CVP Inputs</h1></div><span class="tag bad">⚠ Error</span></div><div class="callout">${escapeHtml(data && data.error ? data.error : "No data")}</div></div>`;
+      return;
+    }
+    renderCvpPage(data);
+  }, err => {
+    el.innerHTML = `<div class="card"><div class="callout">⚠ ${escapeHtml(err && err.message ? err.message : String(err))}</div></div>`;
+  });
+}
+
+/* ---------------- RCA TAB ---------------- */
+function renderRcaPage(){
+  const el = document.getElementById("page-live-rca");
+  if(!el) return;
+
+  /* Realistic festive dummy data — swap for live API when available */
+  const MODE_DATA = {
+    target: {
+      baseline: 100, actual: 92, label: "Target", baselineLabel: "Target ₹100 Cr",
+      units: { baseline: 1200000, actual: 1056000 },
+      asp:   { baseline: 833,     actual: 871 },
+      traffic: { baseline: 18000000, actual: 16500000,
+        direct:   { baseline: 9000000,  actual: 8250000,
+          search: { baseline: 3600000, actual: 3300000 },
+          merch:  { baseline: 2700000, actual: 2310000 },
+          direct: { baseline: 2700000, actual: 2640000 },
+        },
+        indirect: { baseline: 9000000, actual: 8250000 },
+      },
+      funnel: {
+        ppv:      { baseline: 0.72, actual: 0.68 },
+        cabn:     { baseline: 0.38, actual: 0.34 },
+        checkout: { baseline: 0.61, actual: 0.58 },
+        payment:  { baseline: 0.84, actual: 0.81 },
+      },
+      scMix: [
+        { name: "WomenEthnicContemporary", asp: 980, share: 0.28, baselineShare: 0.24 },
+        { name: "WomenWesternCore",        asp: 720, share: 0.22, baselineShare: 0.26 },
+        { name: "MensClothingTopwear",     asp: 540, share: 0.18, baselineShare: 0.20 },
+        { name: "FashionWearables",        asp: 1240,share: 0.15, baselineShare: 0.13 },
+        { name: "Others",                  asp: 620, share: 0.17, baselineShare: 0.17 },
+      ],
+    },
+    yoy: {
+      baseline: 82, actual: 92, label: "LY", baselineLabel: "LY ₹82 Cr",
+      units: { baseline: 980000,  actual: 1056000 },
+      asp:   { baseline: 837,     actual: 871 },
+      traffic: { baseline: 15200000, actual: 16500000,
+        direct:   { baseline: 7600000, actual: 8250000,
+          search: { baseline: 3040000, actual: 3300000 },
+          merch:  { baseline: 2280000, actual: 2310000 },
+          direct: { baseline: 2280000, actual: 2640000 },
+        },
+        indirect: { baseline: 7600000, actual: 8250000 },
+      },
+      funnel: {
+        ppv:      { baseline: 0.65, actual: 0.68 },
+        cabn:     { baseline: 0.31, actual: 0.34 },
+        checkout: { baseline: 0.55, actual: 0.58 },
+        payment:  { baseline: 0.79, actual: 0.81 },
+      },
+      scMix: [
+        { name: "WomenEthnicContemporary", asp: 980, share: 0.28, baselineShare: 0.26 },
+        { name: "WomenWesternCore",        asp: 720, share: 0.22, baselineShare: 0.24 },
+        { name: "MensClothingTopwear",     asp: 540, share: 0.18, baselineShare: 0.19 },
+        { name: "FashionWearables",        asp: 1240,share: 0.15, baselineShare: 0.12 },
+        { name: "Others",                  asp: 620, share: 0.17, baselineShare: 0.19 },
+      ],
+    },
+  };
+
+  let mode = "target";
+  function d(){ return MODE_DATA[mode]; }
+
+  function pct(v){ return (v*100).toFixed(1)+"%"; }
+  function cr(v){ return "₹"+(v/1e7).toFixed(1)+" Cr"; }
+  function lakh(v){ return (v/1e5).toFixed(1)+"L"; }
+  function delta(a,b,invert){ const p=((a-b)/Math.abs(b)*100); const good = invert ? p<0 : p>0; return `<span class="stat ${good?"up":"down"}">${p>=0?"▲":"▼"} ${Math.abs(p).toFixed(1)}%</span>`; }
+  function ppDelta(a,b,invert){ const pp=(a-b)*100; const good = invert ? pp<0 : pp>0; return `<span class="stat ${good?"up":"down"}">${pp>=0?"▲":"▼"} ${Math.abs(pp).toFixed(1)}pp</span>`; }
+  function sev(impact){ if(Math.abs(impact)>15) return "bad"; if(Math.abs(impact)>7) return "warn"; return "ok"; }
+  function badge(label,cls){ return `<span class="tag ${cls}" style="font-size:11px;padding:2px 7px">${label}</span>`; }
+
+  function gmvGap(){ return d().actual - d().baseline; }
+  function unitsImpact(){
+    const gap = gmvGap();
+    const unitsDelta = d().units.actual - d().units.baseline;
+    return gap === 0 ? 0 : (unitsDelta * d().asp.baseline) / (gap * 1e7);
+  }
+  function aspImpact(){
+    const gap = gmvGap();
+    const aspDelta = d().asp.actual - d().asp.baseline;
+    return gap === 0 ? 0 : (aspDelta * d().units.actual) / (gap * 1e7);
+  }
+
+  function buildInsight(){
+    const gap = gmvGap();
+    const uI = unitsImpact()*100, aI = aspImpact()*100;
+    const dir = mode === "target" ? "miss" : "outperformance";
+    const sign = gap < 0 ? "shortfall" : "surplus";
+    const dominant = Math.abs(uI) > Math.abs(aI) ? `${Math.abs(uI).toFixed(0)}% driven by Units ${uI<0?"drop":"lift"}` : `${Math.abs(aI).toFixed(0)}% driven by ASP ${aI<0?"drop":"lift"}`;
+    const funnelWorst = Object.entries(d().funnel).sort((a,b)=>((a[1].actual-a[1].baseline)/a[1].baseline)-((b[1].actual-b[1].baseline)/b[1].baseline))[0];
+    const funnelLabel = {ppv:"PPV rate",cabn:"CABN rate",checkout:"Checkout rate",payment:"Payment rate"}[funnelWorst[0]];
+    const funnelDelta = ((funnelWorst[1].actual - funnelWorst[1].baseline)/funnelWorst[1].baseline*100).toFixed(1);
+    return `In <b>${mode==="target"?"Target Achievement":"YoY"} mode</b>, GMV ${sign} is <b>${cr(Math.abs(gap)*1e7)}</b>. Primary driver: ${dominant}. Weakest funnel step: <b>${funnelLabel}</b> at ${funnelDelta}% vs ${d().label}.`;
+  }
+
+  function treeNode(label, cy, base, unit, drivers, indent, causes){
+    const delta_pct = base ? ((cy-base)/Math.abs(base)*100).toFixed(1) : "N/A";
+    const cls = cy >= base ? "up" : "down";
+    const causeHtml = causes ? `<span style="color:var(--muted);font-size:11px;margin-left:8px">${causes}</span>` : "";
+    const driverHtml = drivers ? `<div style="margin-left:${indent+16}px;margin-top:4px;border-left:2px solid var(--border);padding-left:10px">${drivers}</div>` : "";
+    const fmt = unit==="cr" ? cr : unit==="pct" ? pct : lakh;
+    return `<div style="margin-left:${indent}px;padding:6px 0">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <b style="min-width:180px">${label}</b>
+        <span>${fmt(cy)}</span>
+        <span style="color:var(--muted)">vs ${fmt(base)}</span>
+        <span class="stat ${cls}">${cy>=base?"▲":"▼"} ${Math.abs(delta_pct)}%</span>
+        ${causeHtml}
+      </div>${driverHtml}</div>`;
+  }
+
+  function renderPage(){
+    const D = d();
+    const gap = gmvGap();
+    const gapCr = gap * 1e7;
+    const uPct = (unitsImpact()*100).toFixed(0);
+    const aPct = (aspImpact()*100).toFixed(0);
+    const trafficDelta = ((D.traffic.actual - D.traffic.baseline)/D.traffic.baseline*100).toFixed(1);
+    const trafficCls = D.traffic.actual >= D.traffic.baseline ? "up" : "down";
+
+    const tableRows = [
+      { metric:"GMV", base: D.baseline+" Cr", actual: D.actual+" Cr", delta: ((D.actual-D.baseline)/D.baseline*100).toFixed(1)+"%", impact:"100%", cause: gap<0?"Primary shortfall":"Primary surplus" },
+      { metric:"Units", base:lakh(D.units.baseline), actual:lakh(D.units.actual), delta:((D.units.actual-D.units.baseline)/D.units.baseline*100).toFixed(1)+"%", impact:uPct+"%", cause:D.units.actual<D.units.baseline?"Traffic & Conversion Drop":"Traffic & Conversion Gain" },
+      { metric:"ASP", base:"₹"+D.asp.baseline, actual:"₹"+D.asp.actual, delta:((D.asp.actual-D.asp.baseline)/D.asp.baseline*100).toFixed(1)+"%", impact:aPct+"%", cause:"SC Mix Shift" },
+      { metric:"Visits", base:lakh(D.traffic.baseline), actual:lakh(D.traffic.actual), delta:trafficDelta+"%", impact:"—", cause:"Direct + Indirect Traffic" },
+      { metric:"PPV Rate", base:pct(D.funnel.ppv.baseline), actual:pct(D.funnel.ppv.actual), delta:((D.funnel.ppv.actual-D.funnel.ppv.baseline)*100).toFixed(1)+"pp", impact:"—", cause:"Pricing, EDD/Speed" },
+      { metric:"CABN Rate", base:pct(D.funnel.cabn.baseline), actual:pct(D.funnel.cabn.actual), delta:((D.funnel.cabn.actual-D.funnel.cabn.baseline)*100).toFixed(1)+"pp", impact:"—", cause:"OOS, Shipping fee" },
+      { metric:"Checkout Rate", base:pct(D.funnel.checkout.baseline), actual:pct(D.funnel.checkout.actual), delta:((D.funnel.checkout.actual-D.funnel.checkout.baseline)*100).toFixed(1)+"pp", impact:"—", cause:"OOS, Shipping fee" },
+      { metric:"Payment Rate", base:pct(D.funnel.payment.baseline), actual:pct(D.funnel.payment.actual), delta:((D.funnel.payment.actual-D.funnel.payment.baseline)*100).toFixed(1)+"pp", impact:"—", cause:"PG Success, Coupon" },
+    ];
+
+    el.innerHTML = `
+    <div class="card">
+      <div class="cardhead">
+        <div><h1>RCA — GMV Performance</h1><div class="sub">Root Cause Analysis · ${businessLabel()}</div></div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <div class="chart-mode-toggle" id="rcaModeToggle">
+            <button class="${mode==="target"?"active":""}" data-mode="target">vs Target</button>
+            <button class="${mode==="yoy"?"active":""}" data-mode="yoy">vs LY (YoY)</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Summary Cards -->
+      <div class="grid g3" style="margin-top:12px">
+        <div class="card kpi" style="border:2px solid ${gap<0?"var(--red)":"var(--green)"}">
+          <label>GMV ${mode==="target"?"Achievement":"vs LY"}</label>
+          <div class="value">${cr(D.actual*1e7)}</div>
+          <div class="sub">${D.baselineLabel}</div>
+          <div class="statrow">${delta(D.actual,D.baseline,false)}</div>
+        </div>
+        <div class="card kpi">
+          <label>Units</label>
+          <div class="value">${lakh(D.units.actual)}</div>
+          <div class="sub">${D.label}: ${lakh(D.units.baseline)}</div>
+          <div class="statrow">${delta(D.units.actual,D.units.baseline,false)}</div>
+        </div>
+        <div class="card kpi">
+          <label>ASP</label>
+          <div class="value">₹${D.asp.actual}</div>
+          <div class="sub">${D.label}: ₹${D.asp.baseline}</div>
+          <div class="statrow">${delta(D.asp.actual,D.asp.baseline,false)}</div>
+        </div>
+      </div>
+
+      <!-- Attribution badge -->
+      <div style="margin-top:10px;padding:10px 14px;background:var(--surface2);border-radius:8px;display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+        <b>GMV Gap Attribution:</b>
+        <span>${badge("Units Impact: "+uPct+"%", Math.abs(Number(uPct))>50?"bad":"warn")}</span>
+        <span>${badge("ASP Impact: "+aPct+"%", Math.abs(Number(aPct))>50?"bad":"warn")}</span>
+      </div>
+    </div>
+
+    <!-- Insight -->
+    <div class="card" style="margin-top:10px;background:var(--surface2);border-left:4px solid var(--blue)">
+      <div style="font-size:13px;line-height:1.6">${buildInsight()}</div>
+    </div>
+
+    <!-- RCA Tree -->
+    <div class="card" style="margin-top:10px">
+      <div class="cardhead"><b>DIAGNOSTIC TREE</b><span class="tiny">Click nodes to expand</span></div>
+      <div style="font-size:13px;line-height:1.8">
+
+        ${treeNode("GMV Gap", D.actual*1e7, D.baseline*1e7, "cr", null, 0, null)}
+
+        <div style="margin-left:16px;border-left:2px solid var(--border);padding-left:10px;margin-top:2px">
+
+          <!-- Units branch -->
+          <div style="padding:4px 0">
+            <div style="display:flex;align-items:center;gap:8px;cursor:pointer" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
+              <span style="font-size:16px" class="seg-toggle">▸</span>
+              <b>Units Driver</b>
+              <span>${lakh(D.units.actual)}</span><span style="color:var(--muted)">vs ${lakh(D.units.baseline)}</span>
+              ${delta(D.units.actual,D.units.baseline,false)}
+              ${badge("Impact: "+uPct+"%", sev(Math.abs(Number(uPct))))}
+            </div>
+            <div style="display:none;margin-left:24px;border-left:2px solid var(--border);padding-left:10px">
+
+              <!-- Traffic -->
+              <div style="padding:4px 0">
+                <div style="display:flex;align-items:center;gap:8px;cursor:pointer" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
+                  <span style="font-size:14px">▸</span><b>Traffic</b>
+                  <span>${lakh(D.traffic.actual)}</span><span style="color:var(--muted)">vs ${lakh(D.traffic.baseline)}</span>
+                  <span class="stat ${trafficCls}">${D.traffic.actual>=D.traffic.baseline?"▲":"▼"} ${Math.abs(trafficDelta)}%</span>
+                </div>
+                <div style="display:none;margin-left:24px;border-left:2px solid var(--border);padding-left:10px;font-size:12px">
+                  <div style="padding:3px 0;display:flex;gap:8px;flex-wrap:wrap"><b>Direct</b> ${lakh(D.traffic.direct.actual)} vs ${lakh(D.traffic.direct.baseline)} ${delta(D.traffic.direct.actual,D.traffic.direct.baseline,false)}</div>
+                  <div style="padding:3px 0;margin-left:16px;display:flex;gap:8px;flex-wrap:wrap;color:var(--muted)">Search ${lakh(D.traffic.direct.search.actual)} ${delta(D.traffic.direct.search.actual,D.traffic.direct.search.baseline,false)} · Merch ${lakh(D.traffic.direct.merch.actual)} ${delta(D.traffic.direct.merch.actual,D.traffic.direct.merch.baseline,false)} · Direct/Ref ${lakh(D.traffic.direct.direct.actual)} ${delta(D.traffic.direct.direct.actual,D.traffic.direct.direct.baseline,false)}</div>
+                  <div style="padding:3px 0;display:flex;gap:8px;flex-wrap:wrap"><b>Indirect</b> ${lakh(D.traffic.indirect.actual)} vs ${lakh(D.traffic.indirect.baseline)} ${delta(D.traffic.indirect.actual,D.traffic.indirect.baseline,false)}</div>
+                </div>
+              </div>
+
+              <!-- Funnel / Conversion -->
+              <div style="padding:4px 0">
+                <div style="display:flex;align-items:center;gap:8px;cursor:pointer" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
+                  <span style="font-size:14px">▸</span><b>Conversion Funnel</b>
+                </div>
+                <div style="display:none;margin-left:24px;border-left:2px solid var(--border);padding-left:10px;font-size:12px">
+                  ${[
+                    ["PPV Rate",      D.funnel.ppv,      "Pricing, EDD/Speed"],
+                    ["CABN Rate",     D.funnel.cabn,     "OOS, Shipping fee"],
+                    ["Checkout Rate", D.funnel.checkout, "OOS, Shipping fee"],
+                    ["Payment Rate",  D.funnel.payment,  "PG Success, Coupon failure"],
+                  ].map(([label,f,cause])=>{
+                    const pp=((f.actual-f.baseline)*100);
+                    const cls2=f.actual>=f.baseline?"up":"down";
+                    const sev2=Math.abs(pp)>5?"bad":Math.abs(pp)>2?"warn":"ok";
+                    return `<div style="padding:4px 0;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                      <b>${label}</b> ${pct(f.actual)} vs ${pct(f.baseline)}
+                      <span class="stat ${cls2}">${pp>=0?"▲":"▼"} ${Math.abs(pp).toFixed(1)}pp</span>
+                      ${badge(cause, sev2)}
+                    </div>`;
+                  }).join("")}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ASP branch -->
+          <div style="padding:4px 0">
+            <div style="display:flex;align-items:center;gap:8px;cursor:pointer" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
+              <span style="font-size:16px">▸</span>
+              <b>ASP Driver</b>
+              <span>₹${D.asp.actual}</span><span style="color:var(--muted)">vs ₹${D.asp.baseline}</span>
+              ${delta(D.asp.actual,D.asp.baseline,false)}
+              ${badge("SC Mix Shift", "warn")}
+            </div>
+            <div style="display:none;margin-left:24px;border-left:2px solid var(--border);padding-left:10px;font-size:12px">
+              <table class="table" style="margin-top:6px">
+                <thead><tr><th>SC</th><th>ASP</th><th>Actual Mix</th><th>${D.label} Mix</th><th>Mix Δ</th></tr></thead>
+                <tbody>
+                  ${D.scMix.map(s=>{
+                    const mixDelta=(s.share-s.baselineShare)*100;
+                    const cls3=mixDelta>=0?"up":"down";
+                    return `<tr><td>${s.name}</td><td>₹${s.asp}</td><td>${pct(s.share)}</td><td>${pct(s.baselineShare)}</td><td class="${cls3}">${mixDelta>=0?"▲":"▼"} ${Math.abs(mixDelta).toFixed(1)}pp</td></tr>`;
+                  }).join("")}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- Metric Table -->
+    <div class="card" style="margin-top:10px">
+      <div class="cardhead"><b>METRIC & DRIVER BREAKDOWN</b></div>
+      <div class="table-wrap"><table class="table">
+        <thead><tr><th>Metric</th><th>${D.label}</th><th>Actual</th><th>Delta</th><th>Attribution</th><th>Primary Cause</th></tr></thead>
+        <tbody>
+          ${tableRows.map(r=>{
+            const deltaNum = parseFloat(r.delta);
+            const cls4 = r.metric==="ASP" ? (deltaNum>=0?"up":"down") : (deltaNum>=0?"up":"down");
+            return `<tr><td><b>${r.metric}</b></td><td>${r.base}</td><td>${r.actual}</td><td class="${cls4}">${r.delta}</td><td>${r.impact}</td><td style="color:var(--muted);font-size:12px">${r.cause}</td></tr>`;
+          }).join("")}
+        </tbody>
+      </table></div>
+    </div>
+    `;
+
+    // Wire mode toggle
+    el.querySelectorAll("#rcaModeToggle button").forEach(btn => {
+      btn.addEventListener("click", () => {
+        if(btn.dataset.mode === mode) return;
+        mode = btn.dataset.mode;
+        renderPage();
+      });
+    });
+  }
+
+  renderPage();
+}
+
+function hydrateRca(){
+  renderRcaPage();
+}
+
 /* ---------------- NAV + SHELL ---------------- */
 let activePageId = null;
 
@@ -890,6 +1941,10 @@ function renderNavAndPages(restorePageId){
       const pageId = `${group.id}-${tabKey}`;
       if(pageId === LIVE_PAGE_ID) hydrateLiveSales();
       else if(pageId === FUNNEL_PAGE_ID) hydrateLiveFunnel();
+      else if(pageId === TRAFFIC_PAGE_ID) hydrateLiveTraffic();
+      else if(pageId === CVP_PAGE_ID) hydrateCvp();
+      else if(pageId === RCA_PAGE_ID) renderRcaPage();
+      else if(pageId === SUMMARY_SALES_PAGE_ID) hydrateEventSales();
       else renderComingSoon(group.id, tabKey);
     });
   });

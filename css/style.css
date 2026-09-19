@@ -78,9 +78,23 @@ h1{font-size:16px;margin:0}.sub{font-size:10px;color:var(--muted);margin-top:3px
 .chart-hover-tip .tip-row i{width:6px;height:6px;border-radius:50%;display:inline-block;flex:none}
 .legend{display:flex;gap:12px;font-size:9px;color:var(--muted);margin-top:5px}.legend span{display:flex;gap:5px;align-items:center}.dot{width:8px;height:8px;border-radius:50%;background:var(--blue)}.dot.ly{background:#39a66a}.dot.plan{background:#999}
 
-.seg-parent{cursor:pointer}.seg-parent:hover td{background:#fafcff}
+/* ── Segment hierarchy ─────────────────────────────────────────────── */
+/* L0: top-level parent — strong blue-tinted band, bold, thick left bar */
+.seg-parent td{background:#e4ecf9;font-weight:700;border-bottom:2px solid #c2d0eb;font-size:10px}
+.seg-parent:hover td{background:#d8e5f5}
+.seg-parent td:first-child{border-left:4px solid var(--blue)}
+
+/* L1: child segment (Alpha / Branded MP / etc.) — white bg, medium weight, thinner bar */
+tr.seg-l1 td{background:#fff;font-weight:600;border-bottom:1px solid #e8ecf5;font-size:9.5px}
+tr.seg-l1:hover td{background:#f2f6fc}
+tr.seg-l1 td:first-child{border-left:3px solid #7da8d8;padding-left:18px}
+
+/* L2: grandchild (price points) — light gray bg, muted, indented, minimal bar */
+tr.seg-l2 td{background:#f7f8fc;font-size:11px;color:var(--muted);border-bottom:1px dotted #e4e8f2}
+tr.seg-l2:hover td{background:#edf1fa}
+tr.seg-l2 td:first-child{border-left:2px solid #bfcfe8;padding-left:32px;font-size:11px}
+
 .seg-toggle{display:inline-block;width:12px;color:var(--blue);font-size:8px}
-.seg-child td:first-child{padding-left:24px;color:var(--muted)}
 tr.hidden{display:none}
 
 .section-title{margin:16px 0 8px;font-size:12px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:8px}

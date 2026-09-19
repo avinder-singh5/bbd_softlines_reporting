@@ -57,13 +57,9 @@ const TAB_CONFIGS = {
     ],
   },
   inputs: {
-    key: "inputs", title: "Business Inputs",
+    key: "inputs", title: "CVP Inputs",
     metrics: [
-      M("Input Price Drop", "pct", "down"), M("Output Price Drop", "pct", "down"),
-      M("Input FSP Drop", "pct", "down"), M("Output FSP Drop", "pct", "down"),
-      M("Meesho PI", "idx", "down"), M("AZ PI / Myntra PI", "idx", "down"),
-      M("NB", "pct", "down"), M("OOS", "pct", "down"), M("COD Block", "pct", "down"),
-      M("SLA", "pct", "up"), M("Speed", "pct", "up"),
+      M("Output Price Drop", "pct", "down"), M("Input Price Drop", "pct", "down"),
     ],
   },
   customer: {
@@ -72,11 +68,20 @@ const TAB_CONFIGS = {
   },
 };
 
+const TAB_CONFIGS_EXTRA = {
+  rca: { key: "rca", title: "RCA" },
+};
+Object.assign(TAB_CONFIGS, TAB_CONFIGS_EXTRA);
+
 const NAV_GROUPS = [
-  { id: "live", label: "Live Today", tabs: ["sales", "traffic", "funnel", "inputs"] },
+  { id: "live", label: "Live Today", tabs: ["sales", "traffic", "funnel", "inputs", "rca"] },
   { id: "event", label: "Event Summary", tabs: ["sales", "traffic", "funnel", "inputs", "customer"] },
 ];
 
 /* Only these exact pages are wired to a real data source today. */
-const LIVE_PAGE_ID = "live-sales";
-const FUNNEL_PAGE_ID = "live-funnel";
+const LIVE_PAGE_ID         = "live-sales";
+const FUNNEL_PAGE_ID       = "live-funnel";
+const TRAFFIC_PAGE_ID      = "live-traffic";
+const CVP_PAGE_ID_KEY      = "live-inputs";
+const RCA_PAGE_ID          = "live-rca";
+const SUMMARY_SALES_PAGE_ID = "event-sales";
