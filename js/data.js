@@ -84,4 +84,6 @@ const FUNNEL_PAGE_ID       = "live-funnel";
 const TRAFFIC_PAGE_ID      = "live-traffic";
 const CVP_PAGE_ID_KEY      = "live-inputs";
 const RCA_PAGE_ID          = "live-rca";
-const SUMMARY_SALES_PAGE_ID = "event-sales";
+const SUMMARY_SALES_PAGE_ID   = "event-sales";
+const SUMMARY_FUNNEL_PAGE_ID  = "event-funnel";
+const SUMMARY_TRAFFIC_PAGE_ID = "event-traffic";

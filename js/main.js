@@ -209,8 +209,10 @@ function renderBusinessSwitcher(){
       LIVE_DAY = "D0";
       FUNNEL_DAY = "D0";
       TRAFFIC_DAY = "D0";
-      FUNNEL_FILTERS  = { alpha: "All", sc: "All" };
-      TRAFFIC_FILTERS = { alpha: "All", sc: "All" };
+      FUNNEL_FILTERS        = { alpha: "All", sc: "All" };
+      SUMMARY_FUNNEL_FILTERS = { alpha: "All", sc: "All" };
+      SUMMARY_FUNNEL_DAY = "All";
+      TRAFFIC_FILTERS       = { alpha: "All", sc: "All" };
       CVP_FILTERS     = { sc: "All" };
       renderNavAndPages(activePageId);
     });
@@ -384,12 +386,15 @@ const TRAFFIC_KPI_METRICS = [
   { key: "visits",   label: "Visits",          unit: "m" },
   { key: "direct",   label: "Direct Visits",   unit: "m" },
   { key: "indirect", label: "Indirect Visits",  unit: "m" },
-  { key: "search",   label: "Search",           unit: "m" },
-  { key: "merch",    label: "Merch",            unit: "m" },
-  { key: "reco",     label: "Reco",             unit: "m" },
-  { key: "crm",      label: "CRM",              unit: "m" },
-  { key: "perf",     label: "Perf",             unit: "m" },
-  { key: "pn",       label: "PN",               unit: "m" },
+  { key: "search",   label: "Search Visits",    unit: "m" },
+  { key: "merch",    label: "Merch Visits",     unit: "m" },
+  { key: "reco",     label: "Reco Visits",      unit: "m" },
+  { key: "crm",      label: "CRM Visits",       unit: "m" },
+  { key: "perf",     label: "Perf Visits",      unit: "m" },
+  { key: "reco_hp",  label: "Reco HP Visits",   unit: "m" },
+  { key: "reco_pp",  label: "Reco PP Visits",   unit: "m" },
+  { key: "wlm",      label: "WLM",              unit: "m" },
+  { key: "infinite", label: "Infinite",         unit: "m" },
 ];
 /* Chart metric list — raw additive series only (no derived ratios for traffic). */
 const TRAFFIC_CHART_METRICS = TRAFFIC_KPI_METRICS.map(m => ({
@@ -1167,7 +1172,7 @@ function populateFunnelFilterOptions(){
 }
 
 function renderFunnelKpiCards(targetId, totals, lyTotals){
-  document.getElementById(targetId).innerHTML = FUNNEL_METRICS.map(m => {
+  const cards = FUNNEL_METRICS.map(m => {
     if(m.type === "ratio"){
       const cy = totals[m.den] ? (totals[m.num] / totals[m.den]) * 100 : null;
       const ly = lyTotals && lyTotals[m.den] ? (lyTotals[m.num] / lyTotals[m.den]) * 100 : null;
@@ -1177,30 +1182,66 @@ function renderFunnelKpiCards(targetId, totals, lyTotals){
     const ly = lyTotals ? lyTotals[m.key] / 1e6 : null;
     const yoy = ly !== null ? yoyPct(cy, ly) : null;
     return `<div class="card kpi"><label>${m.label}</label><div class="value">${fmtVal(cy, m.unit)}</div><div class="statrow">${yoyBadge(yoy)}</div></div>`;
-  }).join("");
+  });
+  const wrap = document.getElementById(targetId);
+  wrap.innerHTML = `<div class="grid" style="grid-template-columns:repeat(9,minmax(0,1fr));gap:10px">${cards.join("")}</div>`;
 }
 
-/* Shared by the Segment (Alpha/MP) and Super Category breakdown tables —
-   rows are normalized to {label, ty:{visits,orders}, ly:{visits,orders}|null}.
-   showOV adds an O/V (orders ÷ visits) block — SC table only. */
-function renderFunnelBreakdownTable(targetId, rows, showOV){
-  const cell = (cy, ly, unit) => {
-    const yoy = (ly !== null && ly !== undefined) ? yoyPct(cy, ly) : null;
-    return `<td>${fmtVal(cy, unit)}</td><td>${(ly !== null && ly !== undefined) ? fmtVal(ly, unit) : "—"}</td>${yoyCell(yoy)}`;
+/* Funnel table columns — mirrors KPI cards exactly:
+   abs = Mn value + YoY%   |   ratio = derived % + YoY in bps */
+const FUNNEL_TABLE_COLS = [
+  { label: "Visits",              type: "abs",   pick: t => t.visits / 1e6 },
+  { label: "PPV",                 type: "abs",   pick: t => t.ppv   / 1e6 },
+  { label: "Visits w/ PPV %",     type: "ratio", num: "ppvVisits", den: "visits" },
+  { label: "PPV→CABN %",          type: "ratio", num: "cabn",      den: "ppvVisits" },
+  { label: "CABN→Checkout %",     type: "ratio", num: "checkout",  den: "cabn" },
+  { label: "Checkout→Summary %",  type: "ratio", num: "summary",   den: "checkout" },
+  { label: "Summary→Payment %",   type: "ratio", num: "payment",   den: "summary" },
+  { label: "P2O %",               type: "ratio", num: "orders",    den: "payment" },
+  { label: "O/V %",               type: "ratio", num: "orders",    den: "visits" },
+];
+
+function funnelTableHtml(title, tbodyId, hourCount, rowLabel, callout){
+  const hourStr = `00:00 → ${String(hourCount-1).padStart(2,"0")}:00`;
+  const cols = FUNNEL_TABLE_COLS.flatMap(c =>
+    c.type === "abs"
+      ? [`<th>${c.label} (Mn)</th>`, `<th>${c.label} YoY</th>`]
+      : [`<th>${c.label}</th>`,      `<th>YoY (bps)</th>`]
+  ).join("");
+  return `<div style="margin-top:10px" class="card">
+    <div class="cardhead"><b>${title} BREAKDOWN — CUMULATIVE TILL HOUR</b><span class="tiny">${hourStr}</span></div>
+    ${callout ? `<div class="callout" style="margin:6px 0 4px;font-size:11px;color:var(--muted)">⚠ ${callout}</div>` : ""}
+    <div class="table-wrap"><table class="table">
+      <thead><tr><th>${rowLabel}</th>${cols}</tr></thead>
+      <tbody id="${tbodyId}"></tbody>
+    </table></div>
+  </div>`;
+}
+
+function renderFunnelFullTable(targetId, rows){
+  const ratio = (t, num, den) => t[den] ? t[num] / t[den] * 100 : null;
+  const absCell = (cyMn, lyMn) => {
+    const yoy = lyMn ? yoyPct(cyMn, lyMn) : null;
+    return `<td>${cyMn.toFixed(2)} Mn</td>${yoyCell(yoy)}`;
   };
-  const ovCell = r => {
-    const cy = r.ty.visits ? (r.ty.orders / r.ty.visits) * 100 : null;
-    const ly = (r.ly && r.ly.visits) ? (r.ly.orders / r.ly.visits) * 100 : null;
-    const deltaPp = (cy !== null && ly !== null) ? cy - ly : null;
-    const cls = deltaPp === null ? "" : deltaPp >= 0 ? "up" : "down";
-    return `<td>${cy === null ? "N/A" : cy.toFixed(2) + "%"}</td><td>${ly === null ? "—" : ly.toFixed(2) + "%"}</td><td class="${cls}">${deltaPp === null ? "N/A" : (deltaPp >= 0 ? "▲" : "▼") + " " + Math.abs(deltaPp).toFixed(1) + "pp"}</td>`;
+  const ratioCell = (cyPct, lyPct) => {
+    const bps = (cyPct !== null && lyPct !== null) ? Math.round((cyPct - lyPct) * 100) : null;
+    const cls = bps === null ? "" : bps >= 0 ? "up" : "down";
+    return `<td>${cyPct === null ? "N/A" : cyPct.toFixed(2)+"%"}</td>` +
+           `<td class="${cls}">${bps === null ? "N/A" : (bps>=0?"+":"")+bps+" bps"}</td>`;
   };
-  document.getElementById(targetId).innerHTML = rows.map(r => `
-    <tr><td>${escapeHtml(r.label)}</td>
-      ${cell(r.ty.visits / 1e5, r.ly ? r.ly.visits / 1e5 : null, "l")}
-      ${cell(r.ty.orders / 1e5, r.ly ? r.ly.orders / 1e5 : null, "l")}
-      ${showOV ? ovCell(r) : ""}
-    </tr>`).join("");
+  const tbody = document.getElementById(targetId);
+  if(!tbody) return;
+  tbody.innerHTML = rows.map(r => {
+    const t = r.ty, l = r.ly;
+    const cells = FUNNEL_TABLE_COLS.map(c => {
+      if(c.type === "abs"){
+        return absCell(c.pick(t), l ? c.pick(l) : null);
+      }
+      return ratioCell(ratio(t, c.num, c.den), l ? ratio(l, c.num, c.den) : null);
+    }).join("");
+    return `<tr><td>${escapeHtml(r.label)}</td>${cells}</tr>`;
+  }).join("");
 }
 
 function renderLiveFunnelPage(data){
@@ -1227,7 +1268,7 @@ function renderLiveFunnelPage(data){
         ${FUNNEL_FILTER_KEYS.some(k => FUNNEL_FILTERS[k] !== "All") ? `<div class="chip" id="funnelFilterClear" style="color:var(--blue);border-color:var(--blue)">Clear filters</div>` : ""}
       </div>
 
-      <div class="grid g3" id="funnelKpiRow" style="margin-top:10px"></div>
+      <div id="funnelKpiRow" style="margin-top:10px"></div>
     </div>
 
     <div style="margin-top:10px" class="card">
@@ -1243,21 +1284,8 @@ function renderLiveFunnelPage(data){
       <div class="legend"><span><i class="dot"></i>${fmtSheetDate(data.dateKey)} (This Year)</span>${data.ly ? `<span><i class="dot ly"></i>${fmtSheetDate(data.ly.dateKey)} (Last Year)</span>` : ""}</div>
     </div>
 
-    <div style="margin-top:10px" class="card">
-      <div class="cardhead"><b>SEGMENT BREAKDOWN — CUMULATIVE TILL HOUR</b><span class="tiny">00:00 → ${String(hourCount-1).padStart(2,"0")}:00</span></div>
-      <div class="table-wrap"><table class="table">
-        <thead><tr><th>Segment</th><th>Visits CY</th><th>Visits LY</th><th>Visits YoY</th><th>Orders CY</th><th>Orders LY</th><th>Orders YoY</th></tr></thead>
-        <tbody id="funnelSegmentRows"></tbody>
-      </table></div>
-    </div>
-
-    <div style="margin-top:10px" class="card">
-      <div class="cardhead"><b>SUPER CATEGORY BREAKDOWN — CUMULATIVE TILL HOUR</b><span class="tiny">00:00 → ${String(hourCount-1).padStart(2,"0")}:00</span></div>
-      <div class="table-wrap"><table class="table">
-        <thead><tr><th>Super Category</th><th>Visits CY</th><th>Visits LY</th><th>Visits YoY</th><th>Orders CY</th><th>Orders LY</th><th>Orders YoY</th><th>O/V CY</th><th>O/V LY</th><th>O/V YoY</th></tr></thead>
-        <tbody id="funnelScRows"></tbody>
-      </table></div>
-    </div>
+    ${funnelTableHtml("SEGMENT", "funnelSegmentRows", hourCount, "Segment", "")}
+    ${funnelTableHtml("SUPER CATEGORY", "funnelScRows", hourCount, "Super Category", "")}
   `;
 
   populateFunnelDaySelect(data.days, data.selectedDay);
@@ -1268,8 +1296,8 @@ function renderLiveFunnelPage(data){
     hydrateLiveFunnel();
   });
   renderFunnelKpiCards("funnelKpiRow", data.totals, data.ly ? data.ly.totals : null);
-  renderFunnelBreakdownTable("funnelSegmentRows", data.segments || []);
-  renderFunnelBreakdownTable("funnelScRows", (data.superCategories || []).map(sc => ({ label: sc.name, ty: sc, ly: sc.ly || null })), true);
+  renderFunnelFullTable("funnelSegmentRows", (data.segments || []).map(s => ({ label: s.label, ty: s.ty, ly: s.ly })));
+  renderFunnelFullTable("funnelScRows", (data.superCategories || []).map(sc => ({ label: sc.name, ty: sc, ly: sc.ly || null })));
   wireLiveChart("funnelMetricSelect", "funnelChart", data, data.ly, null, FUNNEL_METRICS);
 }
 
@@ -1284,6 +1312,305 @@ function hydrateLiveFunnel(){
   }, err => {
     renderLiveFunnelEmpty("⚠ Live Funnel Sheet error: " + (err && err.message ? err.message : err));
   });
+}
+
+/* ---------------- EVENT SUMMARY FUNNEL PAGE (Event Summary > Funnel) ---------------- */
+function funnelDailyTableHtml(title, tbodyId, rowLabel){
+  const cols = FUNNEL_TABLE_COLS.flatMap(c =>
+    c.type === "abs"
+      ? [`<th>${c.label} (Mn)</th>`, `<th>${c.label} YoY</th>`]
+      : [`<th>${c.label}</th>`,      `<th>YoY (bps)</th>`]
+  ).join("");
+  return `<div style="margin-top:10px" class="card">
+    <div class="cardhead"><b>${title} BREAKDOWN — FULL EVENT</b></div>
+    <div class="table-wrap"><table class="table">
+      <thead><tr><th>${rowLabel}</th>${cols}</tr></thead>
+      <tbody id="${tbodyId}"></tbody>
+    </table></div>
+  </div>`;
+}
+
+let SUMMARY_FUNNEL_FILTERS = { alpha: "All", sc: "All" };
+let SUMMARY_FUNNEL_DAY = "All";
+
+function renderSummaryFunnelLoading(){
+  const el = document.getElementById("page-event-funnel");
+  if(!el) return;
+  el.innerHTML = `<div class="card"><div class="cardhead"><div><h1>Event Summary — Funnel</h1><div class="sub">Daily cumulative · Big Billion Days 2026</div></div><span class="tag ok">${businessLabel()}</span><span class="tag warn">⏳ Connecting…</span></div><div class="callout">Loading event funnel data for ${businessLabel()}…</div></div>`;
+}
+
+function renderSummaryFunnelEmpty(message){
+  const el = document.getElementById("page-event-funnel");
+  if(!el) return;
+  el.innerHTML = `<div class="card"><div class="cardhead"><div><h1>Event Summary — Funnel</h1><div class="sub">Daily cumulative · Big Billion Days 2026</div></div><span class="tag ok">${businessLabel()}</span><span class="tag bad">⚠ No data</span></div><div class="callout" style="white-space:pre-wrap">${escapeHtml(message)}</div></div>`;
+}
+
+function populateSummaryFunnelFilterOptions(data){
+  // SC filter options derived from superCategories in the data
+  const scNames = (data.superCategories || []).map(r => r.name);
+  FUNNEL_FILTER_KEYS.forEach(key => {
+    const sel = document.getElementById(`sfunnelFilter-${key}`);
+    if(!sel) return;
+    let values = [];
+    if(key === "alpha") values = ["Alpha", "MP"];
+    if(key === "sc") values = scNames;
+    sel.innerHTML = `<option value="All">${FUNNEL_FILTER_LABELS[key]}: All</option>` +
+      values.map(v => `<option value="${escapeHtml(v)}" ${SUMMARY_FUNNEL_FILTERS[key]===v?"selected":""}>${escapeHtml(v)}</option>`).join("");
+    sel.onchange = () => { SUMMARY_FUNNEL_FILTERS[key] = sel.value; hydrateSummaryFunnelTables(); };
+  });
+}
+
+function renderSummaryFunnelDailyChart(data, metricKey){
+  const m = FUNNEL_METRICS.find(x => x.key === metricKey) || FUNNEL_METRICS[0];
+  const cy = (data.daily || []);
+  const ly = (data.ly_daily || []);
+  const labels = cy.map(d => fmtSheetDate(parseInt(d.dateIso.replace(/-/g,""),10)));
+
+  function pick(rows){
+    if(m.type === "ratio"){
+      return rows.map(d => d[m.den] ? (d[m.num] / d[m.den]) * 100 : null);
+    }
+    return rows.map(d => (d[m.key] || 0) / 1e6);
+  }
+
+  const tyData = pick(cy);
+  const series = [{ label: `${m.label} (TY)`, color: "#2563eb", data: tyData }];
+  if(ly.length){
+    const lyLabels = ly.map(d => fmtSheetDate(parseInt(d.dateIso.replace(/-/g,""),10)));
+    // Align LY to same index positions as CY
+    const lyData = labels.map((_, i) => ly[i] ? pick([ly[i]])[0] : null);
+    series.push({ label: `${m.label} (LY)`, color: "#39a66a", dash: [7,5], data: lyData });
+  }
+  const unit = m.type === "ratio" ? "pct" : "m";
+  const el = document.getElementById("sfunnelDailyChart");
+  if(!el) return;
+  el.innerHTML = `<div class="chart" id="sfunnelDailyChartInner" style="height:260px">${svgLineChart(series, labels, unit)}</div>`;
+  attachChartHover("sfunnelDailyChartInner", series, labels, unit);
+}
+
+function renderSummaryFunnelPage(data){
+  const el = document.getElementById("page-event-funnel");
+  if(!el) return;
+
+  const dayOptions = (data.days||[]).map(d => {
+    const s = String(d.dateKey);
+    const label = `${s.slice(6,8)} ${['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+s.slice(4,6)]}`;
+    return `<option value="${d.dateKey}" ${SUMMARY_FUNNEL_DAY===String(d.dateKey)?"selected":""}>${label}</option>`;
+  }).join("");
+
+  el.innerHTML = `
+    <div class="card">
+      <div class="cardhead">
+        <div><h1>Event Summary — Funnel</h1><div class="sub">Daily cumulative · Big Billion Days 2026 · ${data.rowCount} data rows</div></div>
+        <span class="tag ok">${businessLabel()}</span>
+      </div>
+      <div id="sfunnelKpiRow" style="margin-top:10px"></div>
+    </div>
+
+    <div style="margin-top:10px" class="card">
+      <div class="cardhead">
+        <b>DAILY TREND — OVERALL</b>
+        <select class="metric-select" id="sfunnelMetricSelect">
+          ${FUNNEL_METRICS.map(m => `<option value="${m.key}">${m.label}</option>`).join("")}
+        </select>
+      </div>
+      <div id="sfunnelDailyChart"></div>
+      <div class="legend">
+        <span><i class="dot"></i>This Year (2026)</span>
+        ${(data.ly_daily && data.ly_daily.length) ? `<span><i class="dot ly"></i>Last Year (2025)</span>` : ""}
+      </div>
+    </div>
+
+    ${funnelDailyTableHtml("SEGMENT", "sfunnelSegmentRows", "Segment")}
+
+    <div style="margin-top:10px" class="card">
+      <div class="cardhead">
+        <b>SUPER CATEGORY BREAKDOWN — <span id="sfunnelScTitle">${SUMMARY_FUNNEL_DAY === "All" ? "FULL EVENT" : "DAY: "+SUMMARY_FUNNEL_DAY}</span></b>
+        <div style="display:flex;gap:6px;align-items:center">
+          <span class="cbl">Day:</span>
+          <select class="metric-select" id="sfunnelDaySelect">
+            <option value="All">All Days</option>
+            ${dayOptions}
+          </select>
+        </div>
+      </div>
+      <div class="table-wrap"><table class="table">
+        <thead><tr><th>Super Category</th>${FUNNEL_TABLE_COLS.flatMap(c => c.type==="abs" ? [`<th>${c.label} (Mn)</th>`,`<th>${c.label} YoY</th>`] : [`<th>${c.label}</th>`,`<th>YoY (bps)</th>`]).join("")}</tr></thead>
+        <tbody id="sfunnelScRows"></tbody>
+      </table></div>
+    </div>
+  `;
+
+  const daySelect = document.getElementById("sfunnelDaySelect");
+  if(daySelect) daySelect.onchange = e => { SUMMARY_FUNNEL_DAY = e.target.value; hydrateSummaryFunnelTables(); };
+
+  renderFunnelKpiCards("sfunnelKpiRow", data.totals, data.ly ? data.ly.totals : null);
+  renderFunnelFullTable("sfunnelSegmentRows", (data.segments || []).map(s => ({ label: s.label, ty: s.ty, ly: s.ly })));
+  renderFunnelFullTable("sfunnelScRows", (data.superCategories || []).map(sc => ({ label: sc.name, ty: sc, ly: sc.ly || null })));
+
+  let sfunnelMetric = "visits";
+  const paintChart = () => renderSummaryFunnelDailyChart(data, sfunnelMetric);
+  paintChart();
+  document.getElementById("sfunnelMetricSelect").onchange = e => { sfunnelMetric = e.target.value; paintChart(); };
+
+}
+
+function hydrateSummaryFunnelTables(){
+  // Re-fetches only breakdown tables using current day + filter state; KPI/trend unchanged
+  ["sfunnelSegmentRows","sfunnelScRows"].forEach(id => {
+    const el = document.getElementById(id); if(el) el.innerHTML = `<tr><td colspan="99" style="color:var(--muted);text-align:center;padding:12px">Loading…</td></tr>`;
+  });
+  const params = new URLSearchParams({ business: CURRENT_BUSINESS, ...SUMMARY_FUNNEL_FILTERS, day: SUMMARY_FUNNEL_DAY });
+  fetch(`/api/summary-funnel-data?${params}`)
+    .then(r => r.json())
+    .then(data => {
+      renderFunnelFullTable("sfunnelSegmentRows", (data.segments||[]).map(s => ({ label: s.label, ty: s.ty, ly: s.ly })));
+      renderFunnelFullTable("sfunnelScRows", (data.superCategories||[]).map(sc => ({ label: sc.name, ty: sc, ly: sc.ly||null })));
+      const titleEl = document.getElementById("sfunnelScTitle");
+      if(titleEl) titleEl.textContent = SUMMARY_FUNNEL_DAY === "All" ? "FULL EVENT" : "DAY: " + SUMMARY_FUNNEL_DAY;
+    })
+    .catch(() => {});
+}
+
+function hydrateSummaryFunnel(){
+  renderSummaryFunnelLoading();
+  const params = new URLSearchParams({ business: CURRENT_BUSINESS, ...SUMMARY_FUNNEL_FILTERS, day: "All" });
+  fetch(`/api/summary-funnel-data?${params}`)
+    .then(r => r.json())
+    .then(data => {
+      if(!data || data.error || !data.rowCount){
+        renderSummaryFunnelEmpty(`⚠ ${escapeHtml(data && data.error ? data.error : "No daily funnel data found. Check FUNNEL_DAILY_BU_CY_TAB exists in the sheet.")}`);
+        return;
+      }
+      renderSummaryFunnelPage(data);
+    })
+    .catch(e => renderSummaryFunnelEmpty("⚠ Error: " + escapeHtml(e.message)));
+}
+
+/* ---------------- EVENT SUMMARY TRAFFIC PAGE ---------------- */
+let SUMMARY_TRAFFIC_DAY = "All";
+
+function renderSummaryTrafficLoading(){
+  const el = document.getElementById("page-event-traffic");
+  if(el) el.innerHTML = `<div class="card"><div class="cardhead"><h1>Event Summary — Traffic</h1></div><div style="padding:40px;text-align:center;color:var(--muted)">Loading…</div></div>`;
+}
+
+function renderSummaryTrafficEmpty(msg){
+  const el = document.getElementById("page-event-traffic");
+  if(el) el.innerHTML = `<div class="card"><div style="padding:40px;text-align:center;color:var(--muted)">${msg}</div></div>`;
+}
+
+function renderSummaryTrafficDailyChart(data, metricKey){
+  const m = TRAFFIC_KPI_METRICS.find(x => x.key === metricKey) || TRAFFIC_KPI_METRICS[0];
+  const cyDays = data.daily || [];
+  const lyDays = data.ly_daily || [];
+  const labels = cyDays.map(d => fmtSheetDate(parseInt(d.dateIso.replace(/-/g,""), 10)));
+  const cyVals = cyDays.map(d => (d[m.key] || 0) / 1e6);
+  const series = [{ label: `${m.label} (TY)`, color: "#2563eb", data: cyVals }];
+  if(lyDays.length){
+    const lyVals = labels.map((_, i) => lyDays[i] ? (lyDays[i][m.key] || 0) / 1e6 : null);
+    series.push({ label: `${m.label} (LY)`, color: "#39a66a", dash: [7,5], data: lyVals });
+  }
+  const el = document.getElementById("strafficDailyChart");
+  if(!el) return;
+  el.innerHTML = `<div class="chart" id="strafficDailyChartInner" style="height:260px">${svgLineChart(series, labels, "m")}</div>`;
+  attachChartHover("strafficDailyChartInner", series, labels, "m");
+}
+
+function renderSummaryTrafficPage(data){
+  const el = document.getElementById("page-event-traffic");
+  if(!el) return;
+
+  const dayOptions = (data.days||[]).map(d => {
+    const s = String(d.dateKey);
+    const label = `${s.slice(6,8)} ${['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+s.slice(4,6)]}`;
+    return `<option value="${d.dateKey}" ${SUMMARY_TRAFFIC_DAY===String(d.dateKey)?"selected":""}>${label}</option>`;
+  }).join("");
+
+  el.innerHTML = `
+    <div class="card">
+      <div class="cardhead">
+        <div><h1>Event Summary — Traffic</h1><div class="sub">Daily cumulative · Big Billion Days 2026 · ${data.rowCount} days</div></div>
+        <span class="tag ok">${businessLabel()}</span>
+      </div>
+      <div class="grid g6" id="strafficKpiRow" style="margin-top:10px"></div>
+    </div>
+
+    <div style="margin-top:10px" class="card">
+      <div class="cardhead">
+        <b>DAILY TREND — OVERALL</b>
+        <select class="metric-select" id="strafficMetricSelect">
+          ${TRAFFIC_KPI_METRICS.map(m => `<option value="${m.key}">${m.label}</option>`).join("")}
+        </select>
+      </div>
+      <div id="strafficDailyChart"></div>
+      <div class="legend">
+        <span><i class="dot"></i>This Year (2026)</span>
+        ${(data.ly_daily && data.ly_daily.length) ? `<span><i class="dot ly"></i>Last Year (2025)</span>` : ""}
+      </div>
+    </div>
+
+    ${trafficTableHtml("SEGMENT BREAKDOWN — FULL EVENT", "strafficSegmentRows", "")}
+
+    <div style="margin-top:10px" class="card">
+      <div class="cardhead">
+        <b>SUPER CATEGORY BREAKDOWN — <span id="strafficScTitle">${SUMMARY_TRAFFIC_DAY === "All" ? "FULL EVENT" : "DAY: "+SUMMARY_TRAFFIC_DAY}</span></b>
+        <div style="display:flex;gap:6px;align-items:center">
+          <span class="cbl">Day:</span>
+          <select class="metric-select" id="strafficDaySelect">
+            <option value="All">All Days</option>
+            ${dayOptions}
+          </select>
+        </div>
+      </div>
+      <div class="table-wrap"><table class="table">
+        <thead><tr><th>Super Category</th>${TRAFFIC_TABLE_COLS.map(c => `<th>${c.label} (Mn)</th><th>YoY%</th>`).join("")}</tr></thead>
+        <tbody id="strafficScRows"></tbody>
+      </table></div>
+    </div>
+  `;
+
+  const daySelect = document.getElementById("strafficDaySelect");
+  if(daySelect) daySelect.onchange = e => { SUMMARY_TRAFFIC_DAY = e.target.value; hydrateSummaryTrafficTables(); };
+
+  renderTrafficKpiCards("strafficKpiRow", data.totals, data.ly ? data.ly.totals : null);
+  renderTrafficFullTable("strafficSegmentRows", data.segments || [], "Segment");
+  renderTrafficFullTable("strafficScRows", (data.superCategories||[]).map(r => ({label: r.name, ty: r, ly: r.ly})), "Super Category");
+
+  let strafficMetric = "visits";
+  const paintChart = () => renderSummaryTrafficDailyChart(data, strafficMetric);
+  paintChart();
+  document.getElementById("strafficMetricSelect").onchange = e => { strafficMetric = e.target.value; paintChart(); };
+}
+
+function hydrateSummaryTrafficTables(){
+  ["strafficSegmentRows","strafficScRows"].forEach(id => {
+    const el = document.getElementById(id); if(el) el.innerHTML = `<tr><td colspan="99" style="color:var(--muted);text-align:center;padding:12px">Loading…</td></tr>`;
+  });
+  const params = new URLSearchParams({ business: CURRENT_BUSINESS, day: SUMMARY_TRAFFIC_DAY });
+  fetch(`/api/summary-traffic-data?${params}`)
+    .then(r => r.json())
+    .then(data => {
+      renderTrafficFullTable("strafficSegmentRows", data.segments || [], "Segment");
+      renderTrafficFullTable("strafficScRows", (data.superCategories||[]).map(r => ({label: r.name, ty: r, ly: r.ly})), "Super Category");
+      const titleEl = document.getElementById("strafficScTitle");
+      if(titleEl) titleEl.textContent = SUMMARY_TRAFFIC_DAY === "All" ? "FULL EVENT" : "DAY: " + SUMMARY_TRAFFIC_DAY;
+    })
+    .catch(() => {});
+}
+
+function hydrateSummaryTraffic(){
+  renderSummaryTrafficLoading();
+  fetch(`/api/summary-traffic-data?${new URLSearchParams({ business: CURRENT_BUSINESS, day: "All" })}`)
+    .then(r => r.json())
+    .then(data => {
+      if(!data || data.error || !data.rowCount){
+        renderSummaryTrafficEmpty(`⚠ ${escapeHtml(data && data.error ? data.error : "No daily traffic data found.")}`);
+        return;
+      }
+      renderSummaryTrafficPage(data);
+    })
+    .catch(e => renderSummaryTrafficEmpty("⚠ Error: " + escapeHtml(e.message)));
 }
 
 /* ---------------- LIVE TRAFFIC PAGE (Live Today > Traffic — CY only, LY coming later) ---------------- */
@@ -1345,26 +1672,54 @@ function renderTrafficKpiCards(targetId, totals, lyTotals){
   }).join("");
 }
 
-function renderTrafficScTable(targetId, rows){
-  const hasLy = rows.some(r => r.ly);
-  document.getElementById(targetId).innerHTML = rows.map(r => {
+const TRAFFIC_TABLE_COLS = [
+  { label: "Visits",      key: "visits"   },
+  { label: "Direct",      key: "direct"   },
+  { label: "Indirect",    key: "indirect" },
+  { label: "Search",      key: "search"   },
+  { label: "Merch",       key: "merch"    },
+  { label: "Reco",        key: "reco"     },
+  { label: "CRM",         key: "crm"      },
+  { label: "Perf",        key: "perf"     },
+  { label: "Reco HP",     key: "reco_hp"  },
+  { label: "Reco PP",     key: "reco_pp"  },
+  { label: "WLM",         key: "wlm"      },
+  { label: "Infinite",    key: "infinite" },
+];
+
+function renderTrafficFullTable(targetId, rows, nameLabel){
+  const el = document.getElementById(targetId);
+  if(!el) return;
+  const colSpan = 1 + TRAFFIC_TABLE_COLS.length * 2;
+  if(!rows || !rows.length){
+    el.innerHTML = `<tr><td colspan="${colSpan}" style="text-align:center;color:var(--muted)">No data</td></tr>`;
+    return;
+  }
+  el.innerHTML = rows.map(r => {
+    const cy = r.ty || r;
     const ly = r.ly || null;
-    const visYoy = ly ? yoyPct(r.visits, ly.visits) : null;
-    return `<tr>
-      <td>${escapeHtml(r.name)}</td>
-      <td>${fmtVal((r.visits||0)/1e6,"m")}</td>
-      <td>${ly ? fmtVal((ly.visits||0)/1e6,"m") : "—"}</td>
-      ${yoyCell(visYoy)}
-      <td>${fmtVal((r.direct||0)/1e6,"m")}</td>
-      <td>${fmtVal((r.indirect||0)/1e6,"m")}</td>
-      <td>${fmtVal((r.search||0)/1e6,"m")}</td>
-      <td>${fmtVal((r.merch||0)/1e6,"m")}</td>
-      <td>${fmtVal((r.reco||0)/1e6,"m")}</td>
-      <td>${fmtVal((r.crm||0)/1e6,"m")}</td>
-      <td>${fmtVal((r.perf||0)/1e6,"m")}</td>
-      <td>${fmtVal((r.pn||0)/1e6,"m")}</td>
-    </tr>`;
+    const cells = TRAFFIC_TABLE_COLS.map(c => {
+      const cyV = (cy[c.key] || 0) / 1e6;
+      const lyV = ly ? (ly[c.key] || 0) / 1e6 : null;
+      const yoy = lyV !== null ? yoyPct(cyV, lyV) : null;
+      const cls = yoy === null ? "" : yoy >= 0 ? "up" : "down";
+      return `<td>${cyV.toFixed(2)} Mn</td><td class="${cls}">${yoy === null ? "—" : (yoy >= 0 ? "+" : "") + yoy.toFixed(1) + "%"}</td>`;
+    }).join("");
+    const name = r.label || r.name || "—";
+    return `<tr><td>${escapeHtml(name)}</td>${cells}</tr>`;
   }).join("");
+}
+
+function trafficTableHtml(title, tbodyId, subtitle){
+  const headerCols = TRAFFIC_TABLE_COLS.map(c => `<th>${c.label} (Mn)</th><th>YoY%</th>`).join("");
+  return `
+    <div style="margin-top:10px" class="card">
+      <div class="cardhead"><b>${title}</b><span class="tiny">${subtitle||""}</span></div>
+      <div class="table-wrap"><table class="table">
+        <thead><tr><th>Name</th>${headerCols}</tr></thead>
+        <tbody id="${tbodyId}"></tbody>
+      </table></div>
+    </div>`;
 }
 
 function renderLiveTrafficPage(data){
@@ -1391,7 +1746,7 @@ function renderLiveTrafficPage(data){
         ${TRAFFIC_FILTER_KEYS.some(k => TRAFFIC_FILTERS[k] !== "All") ? `<div class="chip" id="trafficFilterClear" style="color:var(--blue);border-color:var(--blue)">Clear filters</div>` : ""}
       </div>
 
-      <div class="grid g3" id="trafficKpiRow" style="margin-top:10px"></div>
+      <div class="grid g6" id="trafficKpiRow" style="margin-top:10px"></div>
     </div>
 
     <div style="margin-top:10px" class="card">
@@ -1405,16 +1760,8 @@ function renderLiveTrafficPage(data){
       <div class="legend"><span><i class="dot"></i>${fmtSheetDate(data.dateKey)} (This Year)</span>${data.ly ? `<span><i class="dot ly"></i>${fmtSheetDate(data.ly.dateKey)} (Last Year)</span>` : ""}</div>
     </div>
 
-    <div style="margin-top:10px" class="card">
-      <div class="cardhead"><b>SUPER CATEGORY BREAKDOWN</b><span class="tiny">00:00 → ${String(hourCount-1).padStart(2,"00")}:00</span></div>
-      <div class="table-wrap"><table class="table">
-        <thead><tr>
-          <th>Super Category</th><th>Visits CY</th><th>Visits LY</th><th>Visits YoY</th>
-          <th>Direct</th><th>Indirect</th><th>Search</th><th>Merch</th><th>Reco</th><th>CRM</th><th>Perf</th><th>PN</th>
-        </tr></thead>
-        <tbody id="trafficScRows"></tbody>
-      </table></div>
-    </div>
+    ${trafficTableHtml("SEGMENT BREAKDOWN", "trafficSegmentRows", `00:00 → ${String(hourCount-1).padStart(2,"00")}:00`)}
+    ${trafficTableHtml("SUPER CATEGORY BREAKDOWN", "trafficScRows", `00:00 → ${String(hourCount-1).padStart(2,"00")}:00`)}
   `;
 
   populateTrafficDaySelect(data.days, data.selectedDay);
@@ -1427,7 +1774,8 @@ function renderLiveTrafficPage(data){
 
   const lyTotals = data.ly ? data.ly.totals : null;
   renderTrafficKpiCards("trafficKpiRow", data.totals, lyTotals);
-  renderTrafficScTable("trafficScRows", data.superCategories || []);
+  renderTrafficFullTable("trafficSegmentRows", data.segments || [], "Segment");
+  renderTrafficFullTable("trafficScRows", (data.superCategories || []).map(r => ({label: r.name, ty: r, ly: r.ly})), "Super Category");
   wireLiveChart("trafficMetricSelect", "trafficChart", data, data.ly || null, null, TRAFFIC_CHART_METRICS);
 }
 
@@ -1944,7 +2292,9 @@ function renderNavAndPages(restorePageId){
       else if(pageId === TRAFFIC_PAGE_ID) hydrateLiveTraffic();
       else if(pageId === CVP_PAGE_ID) hydrateCvp();
       else if(pageId === RCA_PAGE_ID) renderRcaPage();
-      else if(pageId === SUMMARY_SALES_PAGE_ID) hydrateEventSales();
+      else if(pageId === SUMMARY_SALES_PAGE_ID)   hydrateEventSales();
+      else if(pageId === SUMMARY_FUNNEL_PAGE_ID)   hydrateSummaryFunnel();
+      else if(pageId === SUMMARY_TRAFFIC_PAGE_ID) hydrateSummaryTraffic();
       else renderComingSoon(group.id, tabKey);
     });
   });

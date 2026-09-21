@@ -89,6 +89,18 @@ FUNNEL_SC_LY_TAB = "SC_Hourly__Funnel_LY"                  # FUNNEL_LY_SHEET_ID 
 FUNNEL_SC_ALPHA_CY_TAB = "SCxA_MP_Hourly_Funnel_CY"        # FUNNEL_SHEET_ID — SC x Alpha/MP level, CY
 FUNNEL_SC_ALPHA_LY_TAB = "SCxA_MP_Hourly_Funnel_LY"        # FUNNEL_LY_SHEET_ID — SC x Alpha/MP level, LY
 
+# Daily funnel tabs (Event Summary Funnel) — all 8 live in FUNNEL_SHEET_ID
+FUNNEL_DAILY_BU_CY_TAB       = "BU_Daily_Funnel_CY"
+FUNNEL_DAILY_SEG_CY_TAB      = "BUxA_MP_Daily__Funnel_CY"
+FUNNEL_DAILY_SC_CY_TAB       = "SC_Daily_Funnel_CY"
+FUNNEL_DAILY_SC_ALPHA_CY_TAB = "SCxA_MP_Daily__Funnel_CY"
+FUNNEL_DAILY_BU_LY_TAB       = "BU_Daily_Funnel_LY"
+FUNNEL_DAILY_SEG_LY_TAB      = "BUxA_MP_Daily__Funnel_LY"
+FUNNEL_DAILY_SC_LY_TAB       = "SC_Daily_Funnel_LY"
+FUNNEL_DAILY_SC_ALPHA_LY_TAB = "SCxA_MP_Daily__Funnel_LY"
+
+FUNNEL_DAILY_SC_EXCLUDE = {"LifeStyle", "NA", "MensClothingCasualTopwear", "WomenAccessory", "MenAccessory"}
+
 # TY <-> LY date correspondence isn't a fixed offset (event calendars don't
 # align day-for-day) — resolved per-date from this authoritative mapping tab.
 FUNNEL_DATE_MAP_TAB = "Date Mapping"                       # FUNNEL_LY_SHEET_ID
@@ -108,28 +120,34 @@ TRAFFIC_SC_ALPHA_LY_TAB  = "SCxA_MP_Hourly_Traffic_LY"
 # LY sheet uses different column names and 12-hour event_time instead of hour int.
 # CY col -> LY col mapping (None = computed or same key logic applies)
 TRAFFIC_METRICS = [
-    ("visits",    "bu_visits",          "Visits"),
-    ("direct",    None,                 "Direct Visits"),   # computed: visits - indirect
-    ("indirect",  "indirect_bu_visits", "Indirect Visits"),
-    ("search",    "fm_search_bu_visits","Search"),
-    ("merch",     "fm_merch_bu_visits", "Merch"),
-    ("reco",      "fm_reco_bu_visits",  "Reco"),
-    ("crm",       "crm_bu_visits",      "CRM"),
-    ("perf",      "perf_bu_visits",     "Perf"),
-    ("pn",        "pn_bu_visits",       "PN"),
+    ("visits",    "bu_visits",                  "Visits"),
+    ("direct",    None,                         "Direct Visits"),   # computed: visits - indirect
+    ("indirect",  "indirect_bu_visits",         "Indirect Visits"),
+    ("search",    "fm_search_bu_visits",        "Search Visits"),
+    ("merch",     "fm_merch_bu_visits",         "Merch Visits"),
+    ("reco",      "fm_reco_bu_visits",          "Reco Visits"),
+    ("crm",       "crm_bu_visits",              "CRM Visits"),
+    ("perf",      "perf_bu_visits",             "Perf Visits"),
+    ("reco_hp",   "hp_reco_overall_bu_visits",  "Reco HP Visits"),
+    ("reco_pp",   "pp_reco_overall_bu_visits",  "Reco PP Visits"),
+    ("wlm",       "pn_bu_visits",               "WLM"),
+    ("infinite",  "infinite_bu_visits",         "Infinite"),
 ]
 TRAFFIC_METRIC_KEYS = [m[0] for m in TRAFFIC_METRICS]
 
 # LY column names differ from CY
 TRAFFIC_LY_COL_MAP = {
-    "bu_visits":          "bu_visits",
-    "indirect_bu_visits": "indirect_bu_visits",
-    "fm_search_bu_visits":"search_bu_visits",
-    "fm_merch_bu_visits": "merch_bu_visits",
-    "fm_reco_bu_visits":  "reco_bu_visits",
-    "crm_bu_visits":      "crm_bu_visits",
-    "perf_bu_visits":     "perf_bu_visits",
-    "pn_bu_visits":       "pn_bu_visits",
+    "bu_visits":                 "bu_visits",
+    "indirect_bu_visits":        "indirect_bu_visits",
+    "fm_search_bu_visits":       "search_bu_visits",
+    "fm_merch_bu_visits":        "merch_bu_visits",
+    "fm_reco_bu_visits":         "reco_bu_visits",
+    "crm_bu_visits":             "crm_bu_visits",
+    "perf_bu_visits":            "perf_bu_visits",
+    "hp_reco_overall_bu_visits": "hp_reco_bu_visits",
+    "pp_reco_overall_bu_visits": "pp_reco_bu_visits",
+    "pn_bu_visits":              "pn_bu_visits",
+    "infinite_bu_visits":        "infinite_bu_visits",
 }
 
 # ---------------- CVP INPUTS
@@ -311,6 +329,23 @@ MC_DISPLAY_NAMES = {
     "WomenWestern": "Women Western",
     "KidClothing":  "Kid Clothing",
     "Others":       None,   # drop "Others" megacat
+}
+
+# SC → MegaCat mapping for funnel (the funnel SC tab has no mega_cat column)
+SC_TO_MC = {
+    "MensClothingTopwearBranded":       "Mens Clothing Branded",
+    "MensClothingBottomwearBranded":    "Mens Clothing Branded",
+    "MensEssentialsEthnicBranded":      "Mens Clothing Branded",
+    "MensSeasonalWinterBranded":        "Mens Clothing Branded",
+    "MensClothingTopwearUnbranded":     "Mens Clothing Unbranded",
+    "MensClothingBottomwearUnbranded":  "Mens Clothing Unbranded",
+    "MensEssentialsEthnicUnbranded":    "Mens Clothing Unbranded",
+    "MensSeasonalWinterUnbranded":      "Mens Clothing Unbranded",
+    "WomenEthnicCore":                  "Women Ethnic",
+    "WomenEthnicContemporary":          "Women Ethnic",
+    "WomenWesternCore":                 "Women Western",
+    "WomenWesternGrowth":               "Women Western",
+    "KidClothing":                      "Kid Clothing",
 }
 
 def _mc_display(name):
@@ -684,6 +719,383 @@ def resolve_funnel_ly_columns(header):
     return cols
 
 
+def resolve_funnel_daily_columns(header):
+    """Shared by all 8 daily funnel tabs (CY and LY) — no hour column.
+    Both CY and LY daily tabs use the same metric column names (CY names)."""
+    def idx(name): return header.index(name) if name in header else -1
+    cols = {
+        "dateTime": idx("day_time_key"), "date": idx("date"),
+        "hour": -1,  # no hour in daily tabs
+        "bu": idx("business_unit"),
+        "sellerType": idx("seller_type"), "sc": idx("super_category"),
+    }
+    for key, cy_name, ly_name, label in FUNNEL_METRICS:
+        cols[key] = idx(ly_name)   # daily tabs use r_*_hllpp names (same as LY hourly)
+    return cols
+
+
+def aggregate_funnel_daily_rows(values, col, target_bu, seller_filter=None, sc_filter=None):
+    """Aggregate all rows for target_bu across all event dates (date >= DAILY_CY_START
+    for CY tabs, or from a set of valid LY dates for LY tabs).
+    Returns totals + per-date daily list sorted by dateIso."""
+    totals = {k: 0 for k in FUNNEL_METRIC_KEYS}
+    daily_by_date = {}   # dateIso -> {k: 0 ...}
+    row_count = 0
+
+    for row in values[1:]:
+        if str(_cell(row, col["bu"])).strip() != target_bu:
+            continue
+        if seller_filter and str(_cell(row, col["sellerType"])).strip() != seller_filter:
+            continue
+        if sc_filter and str(_cell(row, col.get("sc", -1))).strip() != sc_filter:
+            continue
+        raw_dt = str(_cell(row, col["dateTime"]))
+        if not raw_dt or raw_dt.lower() == "nan":
+            continue
+        date_iso = raw_dt[:10]  # "YYYY-MM-DD" prefix from ISO timestamp
+        d = daily_by_date.setdefault(date_iso, {k: 0 for k in FUNNEL_METRIC_KEYS})
+        for key in FUNNEL_METRIC_KEYS:
+            v = _num(row, col[key])
+            d[key] += v
+            totals[key] += v
+        row_count += 1
+
+    daily = [dict({"dateIso": iso}, **daily_by_date[iso]) for iso in sorted(daily_by_date)]
+    return {"rowCount": row_count, "totals": totals, "daily": daily}
+
+
+def aggregate_funnel_daily_rows_cy(values, col, target_bu, seller_filter=None, sc_filter=None, single_date_int=None):
+    """Like aggregate_funnel_daily_rows but restricts to dates >= DAILY_CY_START.
+    When single_date_int is set, restricts to exactly that date.
+    Deduplicates by (dateIso, sellerType, sc) — pipeline sometimes writes identical rows twice."""
+    # keyed_rows: dedup key -> metric dict (last write wins for identical rows)
+    keyed_rows = {}
+
+    for row in values[1:]:
+        if str(_cell(row, col["bu"])).strip() != target_bu:
+            continue
+        date_int = _int(row, col["date"])
+        if single_date_int is not None:
+            if date_int != single_date_int:
+                continue
+        elif date_int < DAILY_CY_START:
+            continue
+        if seller_filter and str(_cell(row, col["sellerType"])).strip() != seller_filter:
+            continue
+        if sc_filter and str(_cell(row, col.get("sc", -1))).strip() != sc_filter:
+            continue
+        raw_dt = str(_cell(row, col["dateTime"]))
+        if not raw_dt or raw_dt.lower() == "nan":
+            continue
+        date_iso = raw_dt[:10]
+        seller = str(_cell(row, col["sellerType"])).strip()
+        sc = str(_cell(row, col.get("sc", -1))).strip()
+        dedup_key = (date_iso, seller, sc)
+        keyed_rows[dedup_key] = {key: _num(row, col[key]) for key in FUNNEL_METRIC_KEYS}
+
+    # Aggregate deduplicated rows by date
+    daily_by_date = {}
+    totals = {k: 0 for k in FUNNEL_METRIC_KEYS}
+    for (date_iso, seller, sc), metrics in keyed_rows.items():
+        d = daily_by_date.setdefault(date_iso, {k: 0 for k in FUNNEL_METRIC_KEYS})
+        for key in FUNNEL_METRIC_KEYS:
+            d[key] += metrics[key]
+            totals[key] += metrics[key]
+
+    daily = [dict({"dateIso": iso}, **daily_by_date[iso]) for iso in sorted(daily_by_date)]
+    return {"rowCount": len(keyed_rows), "totals": totals, "daily": daily}
+
+
+def funnel_daily_sc_breakdown(values, col, target_bu, seller_filter=None, sc_filter=None, ly_dates=None):
+    """Flat SC totals across all event days for the daily funnel.
+    ly_dates: if set, only rows whose day_time_key prefix is in this set are counted."""
+    sc_data = {}
+    for row in values[1:]:
+        if str(_cell(row, col["bu"])).strip() != target_bu:
+            continue
+        if seller_filter and str(_cell(row, col.get("sellerType", -1))).strip() != seller_filter:
+            continue
+        raw_dt = str(_cell(row, col["dateTime"]))
+        if not raw_dt or raw_dt.lower() == "nan":
+            continue
+        date_iso = raw_dt[:10]
+        if ly_dates is not None and date_iso not in ly_dates:
+            continue
+        sc_name = str(_cell(row, col["sc"]) or "Other").strip()
+        if sc_name in EXCLUDED_SUPER_CATEGORIES or sc_name in FUNNEL_DAILY_SC_EXCLUDE:
+            continue
+        if sc_filter and sc_name != sc_filter:
+            continue
+        d = sc_data.setdefault(sc_name, {k: 0 for k in FUNNEL_METRIC_KEYS})
+        for key in FUNNEL_METRIC_KEYS:
+            d[key] += _num(row, col[key])
+    sc_sorted = sorted(sc_data.items(), key=lambda kv: -kv[1]["visits"])
+    return [dict({"name": name}, **totals) for name, totals in sc_sorted]
+
+
+def funnel_daily_seg_breakdown(values, col, target_bu, ly_dates=None, sc_filter=None):
+    """Alpha/MP segment breakdown for event-summary daily funnel."""
+    seg_data = {}
+    for row in values[1:]:
+        if str(_cell(row, col["bu"])).strip() != target_bu:
+            continue
+        raw_dt = str(_cell(row, col["dateTime"]))
+        if not raw_dt or raw_dt.lower() == "nan":
+            continue
+        date_iso = raw_dt[:10]
+        if ly_dates is not None and date_iso not in ly_dates:
+            continue
+        if sc_filter and str(_cell(row, col.get("sc", -1))).strip() != sc_filter:
+            continue
+        seller = str(_cell(row, col.get("sellerType", -1))).strip() or "Other"
+        d = seg_data.setdefault(seller, {k: 0 for k in FUNNEL_METRIC_KEYS})
+        for key in FUNNEL_METRIC_KEYS:
+            d[key] += _num(row, col[key])
+    return [{"label": label, "ty": v, "ly": None} for label, v in seg_data.items()]
+
+
+def get_summary_funnel_data(business_key, alpha_filter="All", sc_filter="All", selected_day="All"):
+    """Event Summary Funnel — cumulative across all event days, or a single day if selected_day set."""
+    target_bu = BUSINESS_SHEET_MAP.get(business_key, business_key)
+    alpha_active = bool(alpha_filter) and alpha_filter != "All"
+    sc_active = bool(sc_filter) and sc_filter != "All"
+    seller_filter = alpha_filter if alpha_active else None
+    sc_filter_val = sc_filter if sc_active else None
+    # When a specific day is selected, restrict to only that date int (YYYYMMDD)
+    single_date_int = int(selected_day) if selected_day and selected_day != "All" else None
+
+    # Pick the right grain tabs (same logic as live funnel)
+    if alpha_active and sc_active:
+        cy_tab = FUNNEL_DAILY_SC_ALPHA_CY_TAB
+        ly_tab = FUNNEL_DAILY_SC_ALPHA_LY_TAB
+        seg_cy_tab = FUNNEL_DAILY_SC_ALPHA_CY_TAB
+        seg_ly_tab = FUNNEL_DAILY_SC_ALPHA_LY_TAB
+        sc_cy_tab = FUNNEL_DAILY_SC_ALPHA_CY_TAB
+        sc_ly_tab = FUNNEL_DAILY_SC_ALPHA_LY_TAB
+    elif sc_active:
+        cy_tab = FUNNEL_DAILY_SC_CY_TAB
+        ly_tab = FUNNEL_DAILY_SC_LY_TAB
+        seg_cy_tab = FUNNEL_DAILY_SC_ALPHA_CY_TAB
+        seg_ly_tab = FUNNEL_DAILY_SC_ALPHA_LY_TAB
+        sc_cy_tab = FUNNEL_DAILY_SC_CY_TAB
+        sc_ly_tab = FUNNEL_DAILY_SC_LY_TAB
+    elif alpha_active:
+        cy_tab = FUNNEL_DAILY_SEG_CY_TAB
+        ly_tab = FUNNEL_DAILY_SEG_LY_TAB
+        seg_cy_tab = FUNNEL_DAILY_SEG_CY_TAB
+        seg_ly_tab = FUNNEL_DAILY_SEG_LY_TAB
+        sc_cy_tab = FUNNEL_DAILY_SC_ALPHA_CY_TAB
+        sc_ly_tab = FUNNEL_DAILY_SC_ALPHA_LY_TAB
+    else:
+        cy_tab = FUNNEL_DAILY_BU_CY_TAB
+        ly_tab = FUNNEL_DAILY_BU_LY_TAB
+        seg_cy_tab = FUNNEL_DAILY_SEG_CY_TAB
+        seg_ly_tab = FUNNEL_DAILY_SEG_LY_TAB
+        sc_cy_tab = FUNNEL_DAILY_SC_CY_TAB
+        sc_ly_tab = FUNNEL_DAILY_SC_LY_TAB
+
+    empty = {
+        "business": business_key, "rowCount": 0,
+        "totals": {k: 0 for k in FUNNEL_METRIC_KEYS},
+        "daily": [], "ly_daily": [], "days": [],
+        "segments": [], "superCategories": [], "ly": None,
+    }
+
+    # Read CY main tab
+    try:
+        cy_values = get_funnel_sheet_values(cy_tab, sheet_id=FUNNEL_SHEET_ID)
+    except Exception:
+        cy_values = None
+    if not cy_values:
+        return empty
+
+    cy_header = [str(h).strip() for h in cy_values[0]]
+    cy_col = resolve_funnel_daily_columns(cy_header)
+    cy_agg = aggregate_funnel_daily_rows_cy(cy_values, cy_col, target_bu, seller_filter=seller_filter, sc_filter=sc_filter_val, single_date_int=single_date_int)
+
+    # Build event-day list from CY daily data
+    date_map = get_funnel_date_map()
+    days = []
+    for i, d in enumerate(cy_agg["daily"]):
+        iso = d["dateIso"]
+        date_int = int(iso.replace("-", ""))
+        days.append({"key": f"D{i}", "dateKey": date_int, "dateIso": iso})
+
+    # LY — use date mapping to find which LY dates correspond to our CY event day(s)
+    ly_iso_set = set()
+    days_to_map = [d for d in days if single_date_int is None or d["dateKey"] == single_date_int]
+    for d in days_to_map:
+        ly_int = date_map.get(d["dateKey"])
+        if ly_int:
+            s = str(ly_int)
+            ly_iso_set.add(f"{s[:4]}-{s[4:6]}-{s[6:8]}")
+
+    ly_result = None
+    ly_daily = []
+    if ly_iso_set:
+        try:
+            ly_values = get_funnel_sheet_values(ly_tab, sheet_id=FUNNEL_SHEET_ID)
+        except Exception:
+            ly_values = None
+        if ly_values:
+            ly_col = resolve_funnel_daily_columns([str(h).strip() for h in ly_values[0]])
+            ly_agg = aggregate_funnel_daily_rows(ly_values, ly_col, target_bu, seller_filter=seller_filter, sc_filter=sc_filter_val)
+            # Filter to only the LY dates that correspond to our CY event days
+            ly_daily_filtered = [d for d in ly_agg["daily"] if d["dateIso"] in ly_iso_set]
+            ly_totals = {k: sum(d[k] for d in ly_daily_filtered) for k in FUNNEL_METRIC_KEYS}
+            ly_result = {"totals": ly_totals}
+            ly_daily = ly_daily_filtered
+
+    # Segment breakdown (Alpha/MP) across all event days
+    segments = []
+    try:
+        seg_cy_values = get_funnel_sheet_values(seg_cy_tab, sheet_id=FUNNEL_SHEET_ID)
+    except Exception:
+        seg_cy_values = None
+    seg_ly_values = None
+    if ly_iso_set:
+        try:
+            seg_ly_values = get_funnel_sheet_values(seg_ly_tab, sheet_id=FUNNEL_SHEET_ID)
+        except Exception:
+            seg_ly_values = None
+    if seg_cy_values:
+        seg_col = resolve_funnel_daily_columns([str(h).strip() for h in seg_cy_values[0]])
+        for label, seller in (("Alpha", "Alpha"), ("MP", "MP")):
+            # CY: filter to event dates only
+            seg_totals = {k: 0 for k in FUNNEL_METRIC_KEYS}
+            for row in seg_cy_values[1:]:
+                if str(_cell(row, seg_col["bu"])).strip() != target_bu:
+                    continue
+                if str(_cell(row, seg_col["sellerType"])).strip() != seller:
+                    continue
+                date_int = _int(row, seg_col["date"])
+                if single_date_int is not None:
+                    if date_int != single_date_int:
+                        continue
+                elif date_int < DAILY_CY_START:
+                    continue
+                if sc_filter_val and str(_cell(row, seg_col.get("sc", -1))).strip() != sc_filter_val:
+                    continue
+                for key in FUNNEL_METRIC_KEYS:
+                    seg_totals[key] += _num(row, seg_col[key])
+            # LY
+            ly_seg_totals = None
+            if seg_ly_values and ly_iso_set:
+                seg_ly_col = resolve_funnel_daily_columns([str(h).strip() for h in seg_ly_values[0]])
+                ly_seg = {k: 0 for k in FUNNEL_METRIC_KEYS}
+                for row in seg_ly_values[1:]:
+                    if str(_cell(row, seg_ly_col["bu"])).strip() != target_bu:
+                        continue
+                    if str(_cell(row, seg_ly_col["sellerType"])).strip() != seller:
+                        continue
+                    raw_dt = str(_cell(row, seg_ly_col["dateTime"]))
+                    if not raw_dt or raw_dt.lower() == "nan":
+                        continue
+                    if raw_dt[:10] not in ly_iso_set:
+                        continue
+                    if sc_filter_val and str(_cell(row, seg_ly_col.get("sc", -1))).strip() != sc_filter_val:
+                        continue
+                    for key in FUNNEL_METRIC_KEYS:
+                        ly_seg[key] += _num(row, seg_ly_col[key])
+                if sum(ly_seg.values()) > 0:
+                    ly_seg_totals = ly_seg
+            segments.append({"label": label, "ty": seg_totals, "ly": ly_seg_totals})
+
+    # Super Category breakdown across all event days
+    super_categories = []
+    try:
+        sc_values = get_funnel_sheet_values(sc_cy_tab, sheet_id=FUNNEL_SHEET_ID)
+    except Exception:
+        sc_values = None
+    sc_ly_values = None
+    if ly_iso_set:
+        try:
+            sc_ly_values = get_funnel_sheet_values(sc_ly_tab, sheet_id=FUNNEL_SHEET_ID)
+        except Exception:
+            sc_ly_values = None
+    sc_ly_by_name = {}
+    if sc_values:
+        sc_col = resolve_funnel_daily_columns([str(h).strip() for h in sc_values[0]])
+        # CY SC breakdown — filter to event dates
+        sc_data_cy = {}
+        for row in sc_values[1:]:
+            if str(_cell(row, sc_col["bu"])).strip() != target_bu:
+                continue
+            date_int = _int(row, sc_col["date"])
+            if single_date_int is not None:
+                if date_int != single_date_int:
+                    continue
+            elif date_int < DAILY_CY_START:
+                continue
+            if seller_filter and str(_cell(row, sc_col.get("sellerType", -1))).strip() != seller_filter:
+                continue
+            sc_name = str(_cell(row, sc_col["sc"]) or "Other").strip()
+            if sc_name in EXCLUDED_SUPER_CATEGORIES or sc_name in FUNNEL_DAILY_SC_EXCLUDE:
+                continue
+            if sc_filter_val and sc_name != sc_filter_val:
+                continue
+            d = sc_data_cy.setdefault(sc_name, {k: 0 for k in FUNNEL_METRIC_KEYS})
+            for key in FUNNEL_METRIC_KEYS:
+                d[key] += _num(row, sc_col[key])
+        super_categories = sorted(
+            [dict({"name": n}, **v) for n, v in sc_data_cy.items()],
+            key=lambda r: -r["visits"]
+        )
+
+    if sc_ly_values and ly_iso_set:
+        sc_ly_col = resolve_funnel_daily_columns([str(h).strip() for h in sc_ly_values[0]])
+        sc_data_ly = {}
+        for row in sc_ly_values[1:]:
+            if str(_cell(row, sc_ly_col["bu"])).strip() != target_bu:
+                continue
+            raw_dt = str(_cell(row, sc_ly_col["dateTime"]))
+            if not raw_dt or raw_dt.lower() == "nan":
+                continue
+            if raw_dt[:10] not in ly_iso_set:
+                continue
+            if seller_filter and str(_cell(row, sc_ly_col.get("sellerType", -1))).strip() != seller_filter:
+                continue
+            sc_name = str(_cell(row, sc_ly_col["sc"]) or "Other").strip()
+            if sc_name in EXCLUDED_SUPER_CATEGORIES or sc_name in FUNNEL_DAILY_SC_EXCLUDE:
+                continue
+            if sc_filter_val and sc_name != sc_filter_val:
+                continue
+            d = sc_data_ly.setdefault(sc_name, {k: 0 for k in FUNNEL_METRIC_KEYS})
+            for key in FUNNEL_METRIC_KEYS:
+                d[key] += _num(row, sc_ly_col[key])
+        sc_ly_by_name = sc_data_ly
+    for r in super_categories:
+        r["ly"] = sc_ly_by_name.get(r["name"])
+
+    # MC and apparel groups (LS only)
+    mega_categories = []
+    apparel_groups = []
+    if business_key == "LS" and super_categories:
+        mega_categories = funnel_group_by_mc(super_categories)
+        apparel_groups = funnel_group_by_apparel(super_categories)
+        if sc_ly_by_name:
+            ly_sc_rows = [dict({"name": n}, **v) for n, v in sc_ly_by_name.items()]
+            ly_mc = {r["name"]: r for r in funnel_group_by_mc(ly_sc_rows)}
+            ly_app = {r["name"]: r for r in funnel_group_by_apparel(ly_sc_rows)}
+            for mc in mega_categories:
+                mc["ly"] = {k: ly_mc[mc["name"]][k] for k in FUNNEL_METRIC_KEYS} if mc["name"] in ly_mc else None
+            for ag in apparel_groups:
+                ag["ly"] = {k: ly_app[ag["name"]][k] for k in FUNNEL_METRIC_KEYS} if ag["name"] in ly_app else None
+
+    return {
+        "business": business_key, "rowCount": cy_agg["rowCount"],
+        "totals": cy_agg["totals"],
+        "daily": cy_agg["daily"],
+        "ly_daily": ly_daily,
+        "days": days,
+        "ly": ly_result,
+        "segments": segments,
+        "superCategories": super_categories,
+        "megaCategories": mega_categories,
+        "apparelGroups": apparel_groups,
+    }
+
+
 def aggregate_funnel_rows(values, col, target_bu, date_key, hour_limit=None, seller_filter=None, sc_filter=None, date_is_iso=False):
     """date_key: int YYYYMMDD for CY rows, or an ISO 'YYYY-MM-DD' string for LY
     rows (date_is_iso=True, matched by prefix against the ISO timestamp).
@@ -742,7 +1154,7 @@ def funnel_sc_breakdown(values, col, target_bu, date_key, hour_limit, date_is_is
         if seller_filter and str(_cell(row, col.get("sellerType", -1))).strip() != seller_filter:
             continue
         sc_name = str(_cell(row, col["sc"]) or "Other").strip()
-        if sc_name in EXCLUDED_SUPER_CATEGORIES:
+        if sc_name in EXCLUDED_SUPER_CATEGORIES or sc_name in {"LifeStyle", "NA", "MensClothingCasualTopwear", "WomenAccessory", "MenAccessory"}:
             continue
         if sc_filter and sc_name != sc_filter:
             continue
@@ -751,6 +1163,29 @@ def funnel_sc_breakdown(values, col, target_bu, date_key, hour_limit, date_is_is
             d[key] += _num(row, col[key])
     sc_sorted = sorted(sc_data.items(), key=lambda kv: -kv[1]["visits"])
     return [dict({"name": name}, **totals) for name, totals in sc_sorted]
+
+
+def funnel_group_by_mc(sc_rows):
+    """Aggregate SC-level funnel rows into MegaCat groups using SC_TO_MC mapping."""
+    mc_data = {}
+    for sc in sc_rows:
+        mc = SC_TO_MC.get(sc["name"])
+        if not mc:
+            continue
+        d = mc_data.setdefault(mc, {k: 0 for k in FUNNEL_METRIC_KEYS})
+        for k in FUNNEL_METRIC_KEYS:
+            d[k] += sc.get(k, 0)
+    return [dict({"name": mc}, **v) for mc, v in sorted(mc_data.items(), key=lambda kv: -kv[1]["visits"])]
+
+
+def funnel_group_by_apparel(sc_rows):
+    """Aggregate SC-level funnel rows into Apparel / Non-Apparel groups."""
+    groups = {"Apparel": {k: 0 for k in FUNNEL_METRIC_KEYS}, "Non-Apparel": {k: 0 for k in FUNNEL_METRIC_KEYS}}
+    for sc in sc_rows:
+        g = "Apparel" if sc["name"] in LS_APPAREL_SC else "Non-Apparel"
+        for k in FUNNEL_METRIC_KEYS:
+            groups[g][k] += sc.get(k, 0)
+    return [dict({"name": label}, **v) for label, v in groups.items()]
 
 
 def funnel_grain_tabs(alpha_active, sc_active):
@@ -881,6 +1316,23 @@ def get_funnel_data(business_key, day_key="D0", alpha_filter="All", sc_filter="A
         for r in super_categories:
             r["ly"] = sc_ly_by_name.get(r["name"])
 
+    # Mega-cat and apparel groups derived from SC rows (LS only)
+    # LY SC data keyed by name for group aggregation
+    mega_categories = []
+    apparel_groups = []
+    if business_key == "LS" and super_categories:
+        mega_categories = funnel_group_by_mc(super_categories)
+        apparel_groups = funnel_group_by_apparel(super_categories)
+        # attach LY to each MC/apparel group by summing LY SC rows
+        if sc_ly_by_name:
+            ly_sc_rows = [dict({"name": n}, **v) for n, v in sc_ly_by_name.items()]
+            ly_mc = {r["name"]: r for r in funnel_group_by_mc(ly_sc_rows)}
+            ly_app = {r["name"]: r for r in funnel_group_by_apparel(ly_sc_rows)}
+            for mc in mega_categories:
+                mc["ly"] = {k: ly_mc[mc["name"]][k] for k in FUNNEL_METRIC_KEYS} if mc["name"] in ly_mc else None
+            for ag in apparel_groups:
+                ag["ly"] = {k: ly_app[ag["name"]][k] for k in FUNNEL_METRIC_KEYS} if ag["name"] in ly_app else None
+
     return {
         "business": business_key, "sheetBusinessUnit": target_bu, "dateKey": selected_date,
         "excludedHour": latest_hour if hour_limit is not None else None,
@@ -889,6 +1341,8 @@ def get_funnel_data(business_key, day_key="D0", alpha_filter="All", sc_filter="A
         "ly": ly_result,
         "segments": segments,
         "superCategories": super_categories,
+        "megaCategories": mega_categories,
+        "apparelGroups": apparel_groups,
     }
 
 
@@ -967,14 +1421,9 @@ def aggregate_traffic_ly_rows(values, col, target_bu, date_key, hour_limit=None,
         visits   = _num(row, col["visits"])
         indirect = _num(row, col["indirect"])
         direct   = max(0, visits - indirect)
-        vals = {
-            "visits": visits, "direct": direct, "indirect": indirect,
-            "search": _num(row, col["search"]), "merch": _num(row, col["merch"]),
-            "reco":   _num(row, col["reco"]),   "crm":   _num(row, col["crm"]),
-            "perf":   _num(row, col["perf"]),   "pn":    _num(row, col["pn"]),
-        }
         oh = by_hour.setdefault(hr, {k: 0 for k in TRAFFIC_METRIC_KEYS})
-        for k, v in vals.items():
+        for k in TRAFFIC_METRIC_KEYS:
+            v = direct if k == "direct" else _num(row, col[k])
             oh[k] += v
             totals[k] += v
         row_count += 1
@@ -1011,20 +1460,12 @@ def aggregate_traffic_rows(values, col, target_bu, date_key, hour_limit=None, se
             continue
         if sc_filter and sc_name != sc_filter:
             continue
-        visits    = _num(row, col["visits"])
-        indirect  = _num(row, col["indirect"])
-        direct    = max(0, visits - indirect)
-        search    = _num(row, col["search"])
-        merch     = _num(row, col["merch"])
-        reco      = _num(row, col["reco"])
-        crm       = _num(row, col["crm"])
-        perf      = _num(row, col["perf"])
-        pn        = _num(row, col["pn"])
-        vals = {"visits": visits, "direct": direct, "indirect": indirect,
-                "search": search, "merch": merch, "reco": reco,
-                "crm": crm, "perf": perf, "pn": pn}
+        visits   = _num(row, col["visits"])
+        indirect = _num(row, col["indirect"])
+        direct   = max(0, visits - indirect)
         oh = by_hour.setdefault(hr, {k: 0 for k in TRAFFIC_METRIC_KEYS})
-        for k, v in vals.items():
+        for k in TRAFFIC_METRIC_KEYS:
+            v = direct if k == "direct" else _num(row, col[k])
             oh[k] += v
             totals[k] += v
         row_count += 1
@@ -1045,22 +1486,16 @@ def traffic_sc_breakdown(values, col, target_bu, date_key, hour_limit, seller_fi
         if seller_filter and str(_cell(row, col.get("sellerType", -1))).strip() != seller_filter:
             continue
         sc_name = str(_cell(row, col.get("sc", -1)) or "Other").strip()
-        if sc_name in EXCLUDED_SUPER_CATEGORIES:
+        if sc_name in EXCLUDED_SUPER_CATEGORIES or sc_name in FUNNEL_DAILY_SC_EXCLUDE:
             continue
         if sc_filter and sc_name != sc_filter:
             continue
         visits   = _num(row, col["visits"])
         indirect = _num(row, col["indirect"])
+        direct   = max(0, visits - indirect)
         d = sc_data.setdefault(sc_name, {k: 0 for k in TRAFFIC_METRIC_KEYS})
-        d["visits"]   += visits
-        d["direct"]   += max(0, visits - indirect)
-        d["indirect"] += indirect
-        d["search"]   += _num(row, col["search"])
-        d["merch"]    += _num(row, col["merch"])
-        d["reco"]     += _num(row, col["reco"])
-        d["crm"]      += _num(row, col["crm"])
-        d["perf"]     += _num(row, col["perf"])
-        d["pn"]       += _num(row, col["pn"])
+        for k in TRAFFIC_METRIC_KEYS:
+            d[k] += direct if k == "direct" else _num(row, col[k])
     return [dict({"name": name}, **v) for name, v in sorted(sc_data.items(), key=lambda kv: -kv[1]["visits"])]
 
 
@@ -1083,16 +1518,10 @@ def traffic_sc_ly_breakdown(values, col, target_bu, date_key, hour_limit, seller
             continue
         visits   = _num(row, col["visits"])
         indirect = _num(row, col["indirect"])
+        direct   = max(0, visits - indirect)
         d = sc_data.setdefault(sc_name, {k: 0 for k in TRAFFIC_METRIC_KEYS})
-        d["visits"]   += visits
-        d["direct"]   += max(0, visits - indirect)
-        d["indirect"] += indirect
-        d["search"]   += _num(row, col["search"])
-        d["merch"]    += _num(row, col["merch"])
-        d["reco"]     += _num(row, col["reco"])
-        d["crm"]      += _num(row, col["crm"])
-        d["perf"]     += _num(row, col["perf"])
-        d["pn"]       += _num(row, col["pn"])
+        for k in TRAFFIC_METRIC_KEYS:
+            d[k] += direct if k == "direct" else _num(row, col[k])
     return [dict({"name": name}, **v) for name, v in sc_data.items()]
 
 
@@ -1171,12 +1600,39 @@ def get_traffic_data(business_key, day_key="D0", alpha_filter="All", sc_filter="
             for r in super_categories:
                 r["ly"] = ly_sc_by_name.get(r["name"])
 
+    # Segment (Alpha/MP) breakdown
+    segments = []
+    try:
+        seg_cy_values = get_funnel_sheet_values(TRAFFIC_ALPHA_CY_TAB, sheet_id=FUNNEL_SHEET_ID)
+    except Exception:
+        seg_cy_values = None
+    seg_ly_values = None
+    if ly_date_int:
+        try:
+            seg_ly_values = get_funnel_sheet_values(TRAFFIC_ALPHA_LY_TAB, sheet_id=TRAFFIC_LY_SHEET_ID)
+        except Exception:
+            seg_ly_values = None
+    if seg_cy_values:
+        seg_col = resolve_traffic_columns([str(h).strip() for h in seg_cy_values[0]])
+        seg_ly_col = resolve_traffic_ly_columns([str(h).strip() for h in seg_ly_values[0]]) if seg_ly_values else None
+        for label, seller in (("Alpha", "Alpha"), ("MP", "MP")):
+            ty_seg = aggregate_traffic_rows(seg_cy_values, seg_col, target_bu, selected_date,
+                                            hour_limit=hour_limit, seller_filter=seller, sc_filter=sc_filter_val)
+            ly_seg_totals = None
+            if seg_ly_values and seg_ly_col and ly_date_int:
+                ly_seg = aggregate_traffic_ly_rows(seg_ly_values, seg_ly_col, target_bu, ly_date_int,
+                                                    hour_limit=hour_limit, seller_filter=seller, sc_filter=sc_filter_val)
+                if ly_seg["rowCount"] > 0:
+                    ly_seg_totals = ly_seg["totals"]
+            segments.append({"label": label, "ty": ty_seg["totals"], "ly": ly_seg_totals})
+
     return {
         "business": business_key, "sheetBusinessUnit": target_bu, "dateKey": selected_date,
         "excludedHour": latest_hour if hour_limit is not None else None,
         "days": days, "selectedDay": selected_day,
         "rowCount": ty_agg["rowCount"], "totals": ty_agg["totals"], "hourly": ty_agg["hourly"],
         "ly": ly_result,
+        "segments": segments,
         "superCategories": super_categories,
     }
 
@@ -1651,6 +2107,299 @@ def api_funnel_data():
     try:
         result = get_funnel_data(business, day_key, alpha_filter, sc_filter)
     except Exception as e:  # noqa: BLE001 — surface any auth/API error to the UI
+        return jsonify({"error": str(e)}), 500
+    if result["rowCount"] > 0:
+        _aggregate_cache[key] = (now, result)
+    return jsonify(result)
+
+
+# ---- Daily Traffic tabs constants (all in FUNNEL_SHEET_ID) ----
+TRAFFIC_DAILY_BU_CY_TAB       = "BU_Daily_Traffic_CY"
+TRAFFIC_DAILY_SEG_CY_TAB      = "BUxA_MP_Daily_Traffic_CY"
+TRAFFIC_DAILY_SC_CY_TAB       = "SC_Daily_Traffic_CY"
+TRAFFIC_DAILY_SC_ALPHA_CY_TAB = "SCxA_MP_Daily_Traffic_CY"
+TRAFFIC_DAILY_BU_LY_TAB       = "BU_Daily_Traffic_LY"
+TRAFFIC_DAILY_SEG_LY_TAB      = "BUxA_MP_Daily_Traffic_LY"
+TRAFFIC_DAILY_SC_LY_TAB       = "SC_Daily_Traffic_LY"
+TRAFFIC_DAILY_SC_ALPHA_LY_TAB = "SCxA_MP_Daily_Traffic_LY"
+
+
+def resolve_traffic_daily_columns(header):
+    """Daily traffic tabs use date_key + plain col names (same as LY hourly col map values).
+    Stops at blank column (the tab has two sets of columns separated by an empty header)."""
+    try:
+        empty_idx = header.index("")
+        header = header[:empty_idx]
+    except ValueError:
+        pass
+    def idx(name): return header.index(name) if name in header else -1
+    cols = {
+        "date": idx("date_key"), "bu": idx("business_unit"),
+        "sellerType": idx("seller_type"), "sc": idx("super_category"),
+    }
+    # Daily traffic uses the LY-style col names (search_bu_visits, not fm_search_bu_visits)
+    ly_col_name = {v: v for _, _, _ in []}  # identity
+    for key, cy_col, _ in TRAFFIC_METRICS:
+        daily_col = TRAFFIC_LY_COL_MAP.get(cy_col) if cy_col else None
+        cols[key] = idx(daily_col) if daily_col else -1
+    return cols
+
+
+def aggregate_traffic_daily_rows(values, col, target_bu, seller_filter=None, sc_filter=None,
+                                  single_date_int=None, allowed_iso_dates=None):
+    """Aggregate daily traffic rows. Returns totals + per-day list.
+    allowed_iso_dates: if set, only aggregate rows whose dateIso is in this set (used for LY).
+    Otherwise CY mode: single_date_int exact match OR date >= DAILY_CY_START."""
+    # Dedup by (date_int, bu, sellerType, sc) — pipeline can produce duplicate rows
+    keyed_rows = {}
+    for row in values[1:]:
+        date_int = _int(row, col["date"])
+        s = str(date_int)
+        date_iso = f"{s[:4]}-{s[4:6]}-{s[6:8]}" if len(s) == 8 else s
+        if allowed_iso_dates is not None:
+            if date_iso not in allowed_iso_dates:
+                continue
+        elif single_date_int is not None:
+            if date_int != single_date_int:
+                continue
+        elif date_int < DAILY_CY_START:
+            continue
+        if str(_cell(row, col["bu"])).strip() != target_bu:
+            continue
+        seller = str(_cell(row, col.get("sellerType", -1))).strip()
+        if seller_filter and seller != seller_filter:
+            continue
+        sc_name = str(_cell(row, col.get("sc", -1)) or "").strip()
+        if sc_name and (sc_name in EXCLUDED_SUPER_CATEGORIES or sc_name in FUNNEL_DAILY_SC_EXCLUDE):
+            continue
+        if sc_filter and sc_name != sc_filter:
+            continue
+        dedup_key = (date_iso, seller, sc_name)
+        keyed_rows[dedup_key] = (date_iso, row)
+
+    daily_by_date = {}
+    totals = {k: 0 for k in TRAFFIC_METRIC_KEYS}
+    for (_, seller, sc_name), (date_iso, row) in keyed_rows.items():
+        d = daily_by_date.setdefault(date_iso, {k: 0 for k in TRAFFIC_METRIC_KEYS})
+        visits   = _num(row, col["visits"])
+        indirect = _num(row, col["indirect"])
+        direct   = max(0, visits - indirect)
+        for k in TRAFFIC_METRIC_KEYS:
+            v = direct if k == "direct" else _num(row, col[k])
+            d[k] += v
+            totals[k] += v
+    daily = [dict({"dateIso": iso}, **daily_by_date[iso]) for iso in sorted(daily_by_date)]
+    return {"rowCount": len(daily), "totals": totals, "daily": daily}
+
+
+def get_summary_traffic_data(business_key, alpha_filter="All", sc_filter="All", selected_day="All"):
+    """Event Summary Traffic — cumulative across all event days, or a single day."""
+    target_bu = BUSINESS_SHEET_MAP.get(business_key, business_key)
+    alpha_active = bool(alpha_filter) and alpha_filter != "All"
+    sc_active = bool(sc_filter) and sc_filter != "All"
+    seller_filter = alpha_filter if alpha_active else None
+    sc_filter_val = sc_filter if sc_active else None
+    single_date_int = int(selected_day) if selected_day and selected_day != "All" else None
+
+    # Pick grain tabs
+    if alpha_active and sc_active:
+        cy_tab = seg_cy_tab = sc_cy_tab = TRAFFIC_DAILY_SC_ALPHA_CY_TAB
+        ly_tab = seg_ly_tab = sc_ly_tab = TRAFFIC_DAILY_SC_ALPHA_LY_TAB
+    elif sc_active:
+        cy_tab = TRAFFIC_DAILY_SC_CY_TAB; ly_tab = TRAFFIC_DAILY_SC_LY_TAB
+        seg_cy_tab = TRAFFIC_DAILY_SEG_CY_TAB; seg_ly_tab = TRAFFIC_DAILY_SEG_LY_TAB
+        sc_cy_tab = TRAFFIC_DAILY_SC_CY_TAB; sc_ly_tab = TRAFFIC_DAILY_SC_LY_TAB
+    elif alpha_active:
+        cy_tab = seg_cy_tab = TRAFFIC_DAILY_SEG_CY_TAB
+        ly_tab = seg_ly_tab = TRAFFIC_DAILY_SEG_LY_TAB
+        sc_cy_tab = TRAFFIC_DAILY_SC_ALPHA_CY_TAB; sc_ly_tab = TRAFFIC_DAILY_SC_ALPHA_LY_TAB
+    else:
+        cy_tab = TRAFFIC_DAILY_BU_CY_TAB; ly_tab = TRAFFIC_DAILY_BU_LY_TAB
+        seg_cy_tab = TRAFFIC_DAILY_SEG_CY_TAB; seg_ly_tab = TRAFFIC_DAILY_SEG_LY_TAB
+        sc_cy_tab = TRAFFIC_DAILY_SC_CY_TAB; sc_ly_tab = TRAFFIC_DAILY_SC_LY_TAB
+
+    empty = {"business": business_key, "rowCount": 0,
+             "totals": {k: 0 for k in TRAFFIC_METRIC_KEYS},
+             "daily": [], "ly_daily": [], "days": [],
+             "segments": [], "superCategories": [], "ly": None}
+
+    try:
+        cy_values = get_funnel_sheet_values(cy_tab, sheet_id=FUNNEL_SHEET_ID)
+    except Exception:
+        cy_values = None
+    if not cy_values:
+        return empty
+
+    cy_col = resolve_traffic_daily_columns([str(h).strip() for h in cy_values[0]])
+    cy_agg = aggregate_traffic_daily_rows(cy_values, cy_col, target_bu, seller_filter=seller_filter,
+                                          sc_filter=sc_filter_val, single_date_int=single_date_int)
+
+    date_map = get_funnel_date_map()
+    days = [{"key": f"D{i}", "dateKey": int(d["dateIso"].replace("-", "")), "dateIso": d["dateIso"]}
+            for i, d in enumerate(cy_agg["daily"])]
+
+    ly_iso_set = set()
+    days_to_map = [d for d in days if single_date_int is None or d["dateKey"] == single_date_int]
+    for d in days_to_map:
+        ly_int = date_map.get(d["dateKey"])
+        if ly_int:
+            s = str(ly_int)
+            ly_iso_set.add(f"{s[:4]}-{s[4:6]}-{s[6:8]}")
+
+    ly_result = None
+    ly_daily = []
+    if ly_iso_set:
+        try:
+            ly_values = get_funnel_sheet_values(ly_tab, sheet_id=FUNNEL_SHEET_ID)
+        except Exception:
+            ly_values = None
+        if ly_values:
+            ly_col = resolve_traffic_daily_columns([str(h).strip() for h in ly_values[0]])
+            ly_agg = aggregate_traffic_daily_rows(ly_values, ly_col, target_bu, seller_filter=seller_filter,
+                                                  sc_filter=sc_filter_val, allowed_iso_dates=ly_iso_set)
+            ly_daily = ly_agg["daily"]
+            ly_totals = {k: sum(d[k] for d in ly_daily) for k in TRAFFIC_METRIC_KEYS}
+            if sum(ly_totals.values()) > 0:
+                ly_result = {"totals": ly_totals}
+
+    # Segment breakdown (Alpha/MP)
+    segments = []
+    try:
+        seg_cy_values = get_funnel_sheet_values(seg_cy_tab, sheet_id=FUNNEL_SHEET_ID)
+    except Exception:
+        seg_cy_values = None
+    seg_ly_values = None
+    if ly_iso_set:
+        try:
+            seg_ly_values = get_funnel_sheet_values(seg_ly_tab, sheet_id=FUNNEL_SHEET_ID)
+        except Exception:
+            seg_ly_values = None
+    if seg_cy_values:
+        seg_col = resolve_traffic_daily_columns([str(h).strip() for h in seg_cy_values[0]])
+        seg_ly_col = resolve_traffic_daily_columns([str(h).strip() for h in seg_ly_values[0]]) if seg_ly_values else None
+        for label, seller in (("Alpha", "Alpha"), ("MP", "MP")):
+            cy_seg_agg = aggregate_traffic_daily_rows(seg_cy_values, seg_col, target_bu,
+                                                      seller_filter=seller, sc_filter=sc_filter_val,
+                                                      single_date_int=single_date_int)
+            seg_totals = cy_seg_agg["totals"]
+            ly_seg_totals = None
+            if seg_ly_values and seg_ly_col and ly_iso_set:
+                ly_seg_agg = aggregate_traffic_daily_rows(seg_ly_values, seg_ly_col, target_bu,
+                                                          seller_filter=seller, sc_filter=sc_filter_val,
+                                                          allowed_iso_dates=ly_iso_set)
+                ly_seg = ly_seg_agg["totals"]
+                if sum(ly_seg.values()) > 0:
+                    ly_seg_totals = ly_seg
+            segments.append({"label": label, "ty": seg_totals, "ly": ly_seg_totals})
+
+    # SC breakdown
+    super_categories = []
+    try:
+        sc_values = get_funnel_sheet_values(sc_cy_tab, sheet_id=FUNNEL_SHEET_ID)
+    except Exception:
+        sc_values = None
+    sc_ly_values = None
+    if ly_iso_set:
+        try:
+            sc_ly_values = get_funnel_sheet_values(sc_ly_tab, sheet_id=FUNNEL_SHEET_ID)
+        except Exception:
+            sc_ly_values = None
+    if sc_values:
+        sc_col = resolve_traffic_daily_columns([str(h).strip() for h in sc_values[0]])
+        sc_data_cy = {}
+        for row in sc_values[1:]:
+            if str(_cell(row, sc_col["bu"])).strip() != target_bu:
+                continue
+            date_int = _int(row, sc_col["date"])
+            if single_date_int is not None:
+                if date_int != single_date_int: continue
+            elif date_int < DAILY_CY_START:
+                continue
+            if seller_filter and str(_cell(row, sc_col.get("sellerType", -1))).strip() != seller_filter:
+                continue
+            sc_name = str(_cell(row, sc_col.get("sc", -1)) or "Other").strip()
+            if sc_name in EXCLUDED_SUPER_CATEGORIES or sc_name in FUNNEL_DAILY_SC_EXCLUDE:
+                continue
+            if sc_filter_val and sc_name != sc_filter_val:
+                continue
+            d = sc_data_cy.setdefault(sc_name, {k: 0 for k in TRAFFIC_METRIC_KEYS})
+            visits = _num(row, sc_col["visits"])
+            indirect = _num(row, sc_col["indirect"])
+            direct = max(0, visits - indirect)
+            for k in TRAFFIC_METRIC_KEYS:
+                d[k] += direct if k == "direct" else _num(row, sc_col[k])
+        super_categories = sorted([dict({"name": n}, **v) for n, v in sc_data_cy.items()], key=lambda r: -r["visits"])
+
+    if sc_ly_values and ly_iso_set:
+        sc_ly_col = resolve_traffic_daily_columns([str(h).strip() for h in sc_ly_values[0]])
+        sc_data_ly = {}
+        for row in sc_ly_values[1:]:
+            if str(_cell(row, sc_ly_col["bu"])).strip() != target_bu:
+                continue
+            date_int = _int(row, sc_ly_col["date"])
+            s = str(date_int)
+            date_iso = f"{s[:4]}-{s[4:6]}-{s[6:8]}" if len(s) == 8 else s
+            if date_iso not in ly_iso_set:
+                continue
+            if seller_filter and str(_cell(row, sc_ly_col.get("sellerType", -1))).strip() != seller_filter:
+                continue
+            sc_name = str(_cell(row, sc_ly_col.get("sc", -1)) or "Other").strip()
+            if sc_name in EXCLUDED_SUPER_CATEGORIES or sc_name in FUNNEL_DAILY_SC_EXCLUDE:
+                continue
+            d = sc_data_ly.setdefault(sc_name, {k: 0 for k in TRAFFIC_METRIC_KEYS})
+            visits = _num(row, sc_ly_col["visits"])
+            indirect = _num(row, sc_ly_col["indirect"])
+            direct = max(0, visits - indirect)
+            for k in TRAFFIC_METRIC_KEYS:
+                d[k] += direct if k == "direct" else _num(row, sc_ly_col[k])
+        for r in super_categories:
+            if r["name"] in sc_data_ly:
+                r["ly"] = sc_data_ly[r["name"]]
+
+    return {
+        "business": business_key, "rowCount": cy_agg["rowCount"],
+        "totals": cy_agg["totals"], "daily": cy_agg["daily"],
+        "ly_daily": ly_daily, "days": days,
+        "ly": ly_result,
+        "segments": segments,
+        "superCategories": super_categories,
+    }
+
+
+@app.route("/api/summary-traffic-data")
+def api_summary_traffic_data():
+    business = request.args.get("business", "LS")
+    alpha_filter = request.args.get("alpha", "All")
+    sc_filter = request.args.get("sc", "All")
+    selected_day = request.args.get("day", "All")
+    key = ("summary-traffic", business, alpha_filter, sc_filter, selected_day)
+    now = time.time()
+    cached = _aggregate_cache.get(key)
+    if cached and now - cached[0] < AGGREGATE_CACHE_TTL:
+        return jsonify(cached[1])
+    try:
+        result = get_summary_traffic_data(business, alpha_filter, sc_filter, selected_day)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    if result["rowCount"] > 0:
+        _aggregate_cache[key] = (now, result)
+    return jsonify(result)
+
+
+@app.route("/api/summary-funnel-data")
+def api_summary_funnel_data():
+    business = request.args.get("business", "LS")
+    alpha_filter = request.args.get("alpha", "All")
+    sc_filter = request.args.get("sc", "All")
+    selected_day = request.args.get("day", "All")
+    key = ("summary-funnel", business, alpha_filter, sc_filter, selected_day)
+    now = time.time()
+    cached = _aggregate_cache.get(key)
+    if cached and now - cached[0] < AGGREGATE_CACHE_TTL:
+        return jsonify(cached[1])
+    try:
+        result = get_summary_funnel_data(business, alpha_filter, sc_filter, selected_day)
+    except Exception as e:  # noqa: BLE001
         return jsonify({"error": str(e)}), 500
     if result["rowCount"] > 0:
         _aggregate_cache[key] = (now, result)
