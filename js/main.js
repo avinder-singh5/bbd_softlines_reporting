@@ -567,10 +567,9 @@ function renderLiveKpiCards(targetId, agg, ly){
   const planScale = agg.excludedHour != null ? agg.excludedHour / 24 : 1;
   const planGmvCr = plan ? plan.gmv / 1e7 * planScale : null;
   const planUnitsL = plan ? plan.units / 1e5 * planScale : null;
-  const planLabel = agg.excludedHour != null ? `Plan till ${String(agg.excludedHour).padStart(2,"0")}:00` : "Plan";
   document.getElementById(targetId).innerHTML = `
-    <div class="card kpi"><label>GMV</label><div class="value">${fmtVal(totals.gmv,"rs_cr")}</div><div class="statrow">${yoyBadge(gmvYoy)}${achBadge(totals.gmv, planGmvCr)}</div>${planGmvCr?`<div class="spikerow"><span style="color:var(--muted);font-size:10px">${planLabel} ${fmtVal(planGmvCr,"rs_cr")}</span></div>`:""}${spikeBadge("CY",gmvSpike.cy)?`<div class="spikerow">${spikeBadge("CY",gmvSpike.cy)}${spikeBadge("LY",gmvSpike.ly)}</div>`:""}</div>
-    <div class="card kpi"><label>Units</label><div class="value">${fmtVal(totals.units,"l")}</div><div class="statrow">${yoyBadge(unitsYoy)}${achBadge(totals.units, planUnitsL)}</div>${planUnitsL?`<div class="spikerow"><span style="color:var(--muted);font-size:10px">${planLabel} ${fmtVal(planUnitsL,"l")}</span></div>`:""}${spikeBadge("CY",unitsSpike.cy)?`<div class="spikerow">${spikeBadge("CY",unitsSpike.cy)}${spikeBadge("LY",unitsSpike.ly)}</div>`:""}</div>
+    <div class="card kpi"><label>GMV</label><div class="value">${fmtVal(totals.gmv,"rs_cr")}</div><div class="statrow">${yoyBadge(gmvYoy)}${achBadge(totals.gmv, planGmvCr)}</div>${spikeBadge("CY",gmvSpike.cy)?`<div class="spikerow">${spikeBadge("CY",gmvSpike.cy)}${spikeBadge("LY",gmvSpike.ly)}</div>`:""}</div>
+    <div class="card kpi"><label>Units</label><div class="value">${fmtVal(totals.units,"l")}</div><div class="statrow">${yoyBadge(unitsYoy)}${achBadge(totals.units, planUnitsL)}</div>${spikeBadge("CY",unitsSpike.cy)?`<div class="spikerow">${spikeBadge("CY",unitsSpike.cy)}${spikeBadge("LY",unitsSpike.ly)}</div>`:""}</div>
     <div class="card kpi"><label>ASP</label><div class="value">${fmtVal(totals.asp,"rs")}</div><div class="statrow">${yoyBadge(aspYoy)}</div></div>
     <div class="card kpi"><label>UPI Share</label><div class="value">${pct1(ps.upi)}</div><div class="statrow">${ppBadge(ps.upi, lyPs.upi)}</div></div>
     <div class="card kpi"><label>COD Share</label><div class="value">${pct1(ps.cod)}</div><div class="statrow">${ppBadge(ps.cod, lyPs.cod)}</div></div>
