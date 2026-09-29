@@ -807,7 +807,7 @@ function wireLiveChart(selectId, chartId, agg, ly, toggleId, metricsList){
       if(hourlyPlan && hourlyPlan.length === 24){
         // Use actual per-hour plan values from sheet (cols I–AF), null after hourCount
         const scale = m.key === "gmv" ? 1e7 : 1e5;
-        planData = hourlyPlan.map((v, i) => i < hourCount ? v / scale : null);
+        planData = hourlyPlan.map(v => v / scale);
       } else {
         // Fallback: distribute prorated plan by TY hourly mix
         const fullPlanTotal = m.key === "gmv" ? agg.plan.totals.gmv / 1e7 : agg.plan.totals.units / 1e5;
