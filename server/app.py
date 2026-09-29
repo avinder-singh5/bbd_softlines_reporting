@@ -2060,23 +2060,36 @@ PLAN_TAB = "Sales Plan"  # in FUNNEL_LY_SHEET_ID
 
 def load_sales_plan():
     """Read Sales Plan tab and return aggregated plan keyed by (date_int, sc).
-    Returns {"bySC": {date_int: {sc: {gmv, units}}}, "byDate": {date_int: {gmv, units}}}
+    Returns {
+      "bySC":  {date_int: {sc: {gmv, units}}},
+      "byDate": {date_int: {gmv, units}},
+      "byDateHourly": {date_int: {gmv: [h0..h23], units: [h0..h23]}}
+    }
+    Columns I–AF (indices 8–31) hold per-hour plan values.
     Plan is at SC x day x Alpha/MP x Branded grain; we sum across Alpha and Branded."""
     values = get_funnel_sheet_values(PLAN_TAB, sheet_id=FUNNEL_LY_SHEET_ID)
     if not values or len(values) < 2:
-        return {"bySC": {}, "byDate": {}}
+        return {"bySC": {}, "byDate": {}, "byDateHourly": {}}
     header = [str(h).strip() for h in values[0]]
     def idx(name): return header.index(name) if name in header else -1
-    # Two columns named "Metric" — index 5 is type (Gmv/Units), index 6 is label
     metric_col = 5
     date_col = idx("date")
     sc_col = idx("SC")
     whole_col = idx("Whole")
+    # Hourly columns: I=col8 (hour 0) through AF=col31 (hour 23)
+    HOURLY_COL_START = 8
+    HOURLY_COL_END   = 32  # exclusive
     if date_col < 0 or sc_col < 0 or whole_col < 0:
-        return {"bySC": {}, "byDate": {}}
+        return {"bySC": {}, "byDate": {}, "byDateHourly": {}}
 
-    by_sc = {}   # date_int -> sc -> {gmv, units}
-    by_date = {} # date_int -> {gmv, units}
+    by_sc = {}
+    by_date = {}
+    by_date_hourly = {}  # date_int -> {gmv: [24 floats], units: [24 floats]}
+
+    def _num(raw):
+        s = str(raw).replace(",", "").strip()
+        try: return float(s) if s else 0.0
+        except ValueError: return 0.0
 
     for row in values[1:]:
         if len(row) <= max(date_col, sc_col, whole_col, metric_col):
@@ -2086,14 +2099,10 @@ def load_sales_plan():
         except (ValueError, TypeError):
             continue
         sc = str(row[sc_col]).strip()
-        metric = str(row[metric_col]).strip().lower()  # 'gmv' or 'units'
+        metric = str(row[metric_col]).strip().lower()
         if metric not in ("gmv", "units"):
             continue
-        whole_raw = str(row[whole_col]).replace(",", "").strip()
-        try:
-            whole_val = float(whole_raw) if whole_raw else 0.0
-        except ValueError:
-            whole_val = 0.0
+        whole_val = _num(row[whole_col])
 
         sc_map = by_sc.setdefault(date_int, {})
         sc_entry = sc_map.setdefault(sc, {"gmv": 0.0, "units": 0.0})
@@ -2102,11 +2111,18 @@ def load_sales_plan():
         date_entry = by_date.setdefault(date_int, {"gmv": 0.0, "units": 0.0})
         date_entry[metric] += whole_val
 
-    return {"bySC": by_sc, "byDate": by_date}
+        # Accumulate hourly plan
+        dh = by_date_hourly.setdefault(date_int, {"gmv": [0.0]*24, "units": [0.0]*24})
+        for h in range(24):
+            col = HOURLY_COL_START + h
+            if col < len(row):
+                dh[metric][h] += _num(row[col])
+
+    return {"bySC": by_sc, "byDate": by_date, "byDateHourly": by_date_hourly}
 
 
 def get_plan_for_dates(date_ints):
-    """Return plan totals, per-SC totals, and per-date totals over a list of dates."""
+    """Return plan totals, per-SC totals, per-date totals, and hourly plan for single-date live view."""
     plan = load_sales_plan()
     by_sc_totals = {}
     by_date_out = {}
@@ -2121,7 +2137,13 @@ def get_plan_for_dates(date_ints):
             e = by_sc_totals.setdefault(sc, {"gmv": 0.0, "units": 0.0})
             e["gmv"] += vals["gmv"]
             e["units"] += vals["units"]
-    return {"totals": totals, "bySC": by_sc_totals, "byDate": by_date_out}
+    # For single-date live view: expose hourly plan array directly
+    hourly = None
+    if len(date_ints) == 1:
+        dh = plan["byDateHourly"].get(date_ints[0])
+        if dh:
+            hourly = {"gmv": dh["gmv"], "units": dh["units"]}
+    return {"totals": totals, "bySC": by_sc_totals, "byDate": by_date_out, "hourly": hourly}
 
 
 def parse_filters(args):
