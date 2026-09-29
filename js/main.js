@@ -563,11 +563,15 @@ function renderLiveKpiCards(targetId, agg, ly){
   const bau = agg.bauSpike || {};
   const gmvSpike = bau.gmv || {}, unitsSpike = bau.units || {};
   const plan = agg.plan && agg.plan.totals;
-  const planGmvCr = plan ? plan.gmv / 1e7 : null;
-  const planUnitsL = plan ? plan.units / 1e5 : null;
+  // For live D0 (excludedHour set), achievement is vs plan-till-that-hour not full day
+  const planScale = agg.excludedHour != null ? agg.excludedHour / 24 : 1;
+  const planGmvCr = plan ? plan.gmv / 1e7 * planScale : null;
+  const planUnitsL = plan ? plan.units / 1e5 * planScale : null;
+  const fullPlanGmvCr = plan ? plan.gmv / 1e7 : null;
+  const fullPlanUnitsL = plan ? plan.units / 1e5 : null;
   document.getElementById(targetId).innerHTML = `
-    <div class="card kpi"><label>GMV</label><div class="value">${fmtVal(totals.gmv,"rs_cr")}</div><div class="statrow">${yoyBadge(gmvYoy)}${achBadge(totals.gmv, planGmvCr)}</div>${planGmvCr?`<div class="spikerow"><span style="color:var(--muted);font-size:10px">Plan ${fmtVal(planGmvCr,"rs_cr")}</span></div>`:""}${spikeBadge("CY",gmvSpike.cy)?`<div class="spikerow">${spikeBadge("CY",gmvSpike.cy)}${spikeBadge("LY",gmvSpike.ly)}</div>`:""}</div>
-    <div class="card kpi"><label>Units</label><div class="value">${fmtVal(totals.units,"l")}</div><div class="statrow">${yoyBadge(unitsYoy)}${achBadge(totals.units, planUnitsL)}</div>${planUnitsL?`<div class="spikerow"><span style="color:var(--muted);font-size:10px">Plan ${fmtVal(planUnitsL,"l")}</span></div>`:""}${spikeBadge("CY",unitsSpike.cy)?`<div class="spikerow">${spikeBadge("CY",unitsSpike.cy)}${spikeBadge("LY",unitsSpike.ly)}</div>`:""}</div>
+    <div class="card kpi"><label>GMV</label><div class="value">${fmtVal(totals.gmv,"rs_cr")}</div><div class="statrow">${yoyBadge(gmvYoy)}${achBadge(totals.gmv, planGmvCr)}</div>${fullPlanGmvCr?`<div class="spikerow"><span style="color:var(--muted);font-size:10px">Plan ${fmtVal(fullPlanGmvCr,"rs_cr")}</span></div>`:""}${spikeBadge("CY",gmvSpike.cy)?`<div class="spikerow">${spikeBadge("CY",gmvSpike.cy)}${spikeBadge("LY",gmvSpike.ly)}</div>`:""}</div>
+    <div class="card kpi"><label>Units</label><div class="value">${fmtVal(totals.units,"l")}</div><div class="statrow">${yoyBadge(unitsYoy)}${achBadge(totals.units, planUnitsL)}</div>${fullPlanUnitsL?`<div class="spikerow"><span style="color:var(--muted);font-size:10px">Plan ${fmtVal(fullPlanUnitsL,"l")}</span></div>`:""}${spikeBadge("CY",unitsSpike.cy)?`<div class="spikerow">${spikeBadge("CY",unitsSpike.cy)}${spikeBadge("LY",unitsSpike.ly)}</div>`:""}</div>
     <div class="card kpi"><label>ASP</label><div class="value">${fmtVal(totals.asp,"rs")}</div><div class="statrow">${yoyBadge(aspYoy)}</div></div>
     <div class="card kpi"><label>UPI Share</label><div class="value">${pct1(ps.upi)}</div><div class="statrow">${ppBadge(ps.upi, lyPs.upi)}</div></div>
     <div class="card kpi"><label>COD Share</label><div class="value">${pct1(ps.cod)}</div><div class="statrow">${ppBadge(ps.cod, lyPs.cod)}</div></div>
@@ -587,6 +591,7 @@ function renderLiveTable(targetId, agg){
     return `<td>${fmtVal(cy, unit)}</td><td>${ly ? fmtVal(ly, unit) : "—"}</td>${yoyCell(yoy)}`;
   };
   const planBySC = (agg.plan && agg.plan.bySC) || {};
+  const planScale = agg.excludedHour != null ? agg.excludedHour / 24 : 1;
   // Compute apparel / non-apparel plan by summing across SC members
   const apparelPlanGmv = [...LS_APPAREL_SC].reduce((s, sc) => s + (planBySC[sc] ? planBySC[sc].gmv : 0), 0);
   const apparelPlanUnits = [...LS_APPAREL_SC].reduce((s, sc) => s + (planBySC[sc] ? planBySC[sc].units : 0), 0);
@@ -594,6 +599,7 @@ function renderLiveTable(targetId, agg){
   const totalPlanUnits = agg.plan && agg.plan.totals ? agg.plan.totals.units : 0;
   const nonApparelPlanGmv = totalPlanGmv - apparelPlanGmv;
   const nonApparelPlanUnits = totalPlanUnits - apparelPlanUnits;
+  // planMap stores full-day plan; achCell uses planScale to prorate for live hours
   const planMap = { "Apparel": { gmv: apparelPlanGmv, units: apparelPlanUnits }, "Non-Apparel": { gmv: nonApparelPlanGmv, units: nonApparelPlanUnits } };
   const noPlan = `<td class="plan-col">—</td><td class="plan-col">—</td>`;
 
@@ -604,7 +610,7 @@ function renderLiveTable(targetId, agg){
     const parentKey = `p${pi}`;
     const rPlan = planMap[r.label] || null;
     const rPlanCols = rPlan && rPlan.gmv
-      ? `${planCell(rPlan.gmv/1e7, "rs_cr")}${achCell(r.tyGmv/1e7, rPlan.gmv/1e7, "rs_cr")}${planCell(rPlan.units/1e5, "l")}${achCell(r.tyUnits/1e5, rPlan.units/1e5, "l")}`
+      ? `${planCell(rPlan.gmv/1e7, "rs_cr")}${achCell(r.tyGmv/1e7, rPlan.gmv/1e7*planScale, "rs_cr")}${planCell(rPlan.units/1e5, "l")}${achCell(r.tyUnits/1e5, rPlan.units/1e5*planScale, "l")}`
       : noPlan + noPlan;
     html += `<tr class="seg-parent" data-key="${parentKey}">
       <td><span class="seg-toggle">▸</span><b>${escapeHtml(r.label)}</b></td>
@@ -678,6 +684,7 @@ function renderNamedBreakdownTable(targetId, agg, fieldName){
   ((agg.ly && agg.ly[fieldName]) || []).forEach(s => { lyByName[s.name] = s; });
   // Build SC-level plan lookup — for MC rows, sum plan across their SCs
   const planBySC = (agg.plan && agg.plan.bySC) || {};
+  const planScale = agg.excludedHour != null ? agg.excludedHour / 24 : 1;
   const rows = agg[fieldName] || [];
   const tbody = document.getElementById(targetId);
   let html = "";
@@ -703,9 +710,9 @@ function renderNamedBreakdownTable(targetId, agg, fieldName){
     html += `<tr class="seg-parent" data-key="np${i}" style="cursor:${hasPP?"pointer":"default"}">
       <td>${hasPP?`<span class="seg-toggle">▸</span>`:""}${escapeHtml(r.name)}</td>
       ${cell(r.gmv/1e7, ly?ly.gmv/1e7:null,"rs_cr")}${spikeCell(r.cyGmvSpike)}${spikeCell(r.lyGmvSpike)}
-      <td class="plan-col">${planGmvCr!==null?fmtVal(planGmvCr,"rs_cr"):"—"}</td>${achCell(r.gmv/1e7,planGmvCr,"rs_cr")}
+      <td class="plan-col">${planGmvCr!==null?fmtVal(planGmvCr,"rs_cr"):"—"}</td>${achCell(r.gmv/1e7, planGmvCr!==null?planGmvCr*planScale:null,"rs_cr")}
       ${cell(r.units/1e5, ly?ly.units/1e5:null,"l")}${spikeCell(r.cyUnitsSpike)}${spikeCell(r.lyUnitsSpike)}
-      <td class="plan-col">${planUnitsL!==null?fmtVal(planUnitsL,"l"):"—"}</td>${achCell(r.units/1e5,planUnitsL,"l")}
+      <td class="plan-col">${planUnitsL!==null?fmtVal(planUnitsL,"l"):"—"}</td>${achCell(r.units/1e5, planUnitsL!==null?planUnitsL*planScale:null,"l")}
     </tr>`;
     if(hasPP){
       r.pricePoints.forEach(pp => {
