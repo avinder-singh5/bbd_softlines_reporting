@@ -577,13 +577,24 @@ function renderLiveKpiCards(targetId, agg, ly){
 
 /* 3-level segment breakdown: segment → Alpha/BMP/UMP → price point.
    Level 0 = top (segment), level 1 = child (seller type), level 2 = grandchild (price point). */
+// SCs classified as Apparel in LS (mirrors backend LS_APPAREL_SC)
+const LS_APPAREL_SC = new Set(["FashionWearables","KidsFootwear","LuggageAndTravelAccessories","MensCnFFootwear","MensOpenFootwear","MensSportsFootwear","WomenFW"]);
+
 function renderLiveTable(targetId, agg){
   const rows = agg.breakdown || [];
   const cell = (cy, ly, unit) => {
     const yoy = ly ? yoyPct(cy, ly) : null;
     return `<td>${fmtVal(cy, unit)}</td><td>${ly ? fmtVal(ly, unit) : "—"}</td>${yoyCell(yoy)}`;
   };
-  // Segment table has no plan at row level — show empty plan cols
+  const planBySC = (agg.plan && agg.plan.bySC) || {};
+  // Compute apparel / non-apparel plan by summing across SC members
+  const apparelPlanGmv = [...LS_APPAREL_SC].reduce((s, sc) => s + (planBySC[sc] ? planBySC[sc].gmv : 0), 0);
+  const apparelPlanUnits = [...LS_APPAREL_SC].reduce((s, sc) => s + (planBySC[sc] ? planBySC[sc].units : 0), 0);
+  const totalPlanGmv = agg.plan && agg.plan.totals ? agg.plan.totals.gmv : 0;
+  const totalPlanUnits = agg.plan && agg.plan.totals ? agg.plan.totals.units : 0;
+  const nonApparelPlanGmv = totalPlanGmv - apparelPlanGmv;
+  const nonApparelPlanUnits = totalPlanUnits - apparelPlanUnits;
+  const planMap = { "Apparel": { gmv: apparelPlanGmv, units: apparelPlanUnits }, "Non-Apparel": { gmv: nonApparelPlanGmv, units: nonApparelPlanUnits } };
   const noPlan = `<td class="plan-col">—</td><td class="plan-col">—</td>`;
 
   const tbody = document.getElementById(targetId);
@@ -591,10 +602,14 @@ function renderLiveTable(targetId, agg){
 
   rows.forEach((r, pi) => {
     const parentKey = `p${pi}`;
+    const rPlan = planMap[r.label] || null;
+    const rPlanCols = rPlan && rPlan.gmv
+      ? `${planCell(rPlan.gmv/1e7, "rs_cr")}${achCell(r.tyGmv/1e7, rPlan.gmv/1e7, "rs_cr")}${planCell(rPlan.units/1e5, "l")}${achCell(r.tyUnits/1e5, rPlan.units/1e5, "l")}`
+      : noPlan + noPlan;
     html += `<tr class="seg-parent" data-key="${parentKey}">
       <td><span class="seg-toggle">▸</span><b>${escapeHtml(r.label)}</b></td>
-      ${cell(r.tyGmv/1e7, r.lyGmv/1e7, "rs_cr")}${spikeCell(r.cyGmvSpike)}${spikeCell(r.lyGmvSpike)}${noPlan}
-      ${cell(r.tyUnits/1e5, r.lyUnits/1e5, "l")}${spikeCell(r.cyUnitsSpike)}${spikeCell(r.lyUnitsSpike)}${noPlan}
+      ${cell(r.tyGmv/1e7, r.lyGmv/1e7, "rs_cr")}${spikeCell(r.cyGmvSpike)}${spikeCell(r.lyGmvSpike)}${rPlanCols}
+      ${cell(r.tyUnits/1e5, r.lyUnits/1e5, "l")}${spikeCell(r.cyUnitsSpike)}${spikeCell(r.lyUnitsSpike)}
     </tr>`;
 
     (r.children || []).forEach((c, ci) => {
@@ -779,6 +794,21 @@ function wireLiveChart(selectId, chartId, agg, ly, toggleId, metricsList){
     }
     const series = [{ label: m.label + " (TY)", color: "#2563eb", data: tyData }];
     if(lyData) series.push({ label: m.label + " (LY)", color: "#39a66a", dash: [7,5], data: lyData });
+    // Plan line for GMV / Units only
+    if((m.key === "gmv" || m.key === "units") && agg.plan && agg.plan.totals){
+      const planTotal = m.key === "gmv" ? agg.plan.totals.gmv / 1e7 : agg.plan.totals.units / 1e5;
+      const hourCount = agg.excludedHour != null ? agg.excludedHour : 24;
+      const perHour = planTotal / 24;
+      if(mode === "cumulative"){
+        // ramp from perHour to planTotal over 24 h, null after hourCount
+        const planData = Array.from({length: 24}, (_, i) => i < hourCount ? perHour * (i + 1) : null);
+        series.push({ label: m.label + " (Plan)", color: "#999", dash: [4,3], width: 1.5, data: planData });
+      } else {
+        // flat per-hour rate, null after hourCount
+        const planData = Array.from({length: 24}, (_, i) => i < hourCount ? perHour : null);
+        series.push({ label: m.label + " (Plan)", color: "#999", dash: [4,3], width: 1.5, data: planData });
+      }
+    }
     document.getElementById(chartId).innerHTML = svgLineChart(series, HOUR_LABELS, m.unit);
     attachChartHover(chartId, series, HOUR_LABELS, m.unit);
     attachChartLabels(chartId, series, HOUR_LABELS, m.unit);
@@ -955,7 +985,7 @@ function renderLiveSalesPage(overallData){
         </div>
       </div>
       <div class="chart" id="liveChart"></div>
-      <div class="legend"><span><i class="dot"></i>${fmtSheetDate(overallData.dateKey)} (This Year)</span>${overallData.ly ? `<span><i class="dot ly"></i>${fmtSheetDate(overallData.ly.dateKey)} (Last Year)</span>` : ""}</div>
+      <div class="legend"><span><i class="dot"></i>${fmtSheetDate(overallData.dateKey)} (This Year)</span>${overallData.ly ? `<span><i class="dot ly"></i>${fmtSheetDate(overallData.ly.dateKey)} (Last Year)</span>` : ""}<span><i class="dot plan"></i>Plan</span></div>
     </div>
 
     ${breakdownTableHtml("SELLER TYPE", "liveTableRows", hourCount, CURRENT_BUSINESS === "LS" ? "Apparel / Non-Apparel" : "Alpha / MP", "seg")}
@@ -1007,7 +1037,7 @@ function breakdownDailyTableHtml(title, tbodyId, rowLabel, ns){
       <span class="cbl">Filter:</span>${filterBar}
     </div>
     <div class="table-wrap"><table class="table">
-      <thead><tr><th>${rowLabel}</th><th>GMV CY</th><th>GMV LY</th><th>GMV YoY</th><th>GMV CY Spike</th><th>GMV LY Spike</th><th>Units CY</th><th>Units LY</th><th>Units YoY</th><th>Units CY Spike</th><th>Units LY Spike</th></tr></thead>
+      <thead><tr><th>${rowLabel}</th><th>GMV CY</th><th>GMV LY</th><th>GMV YoY</th><th>GMV CY Spike</th><th>GMV LY Spike</th><th class="plan-col">GMV Plan</th><th class="plan-col">GMV Ach%</th><th>Units CY</th><th>Units LY</th><th>Units YoY</th><th>Units CY Spike</th><th>Units LY Spike</th><th class="plan-col">Units Plan</th><th class="plan-col">Units Ach%</th></tr></thead>
       <tbody id="${tbodyId}"></tbody>
     </table></div>
   </div>`;
@@ -1060,6 +1090,18 @@ function renderSummaryDailyChart(data, metric, mode){
   const mLabel = metric === "gmv" ? "GMV" : "Units";
   const series = [{ label: `${mLabel} (TY)`, color: "#2563eb", data: tyData }];
   if(lyData) series.push({ label: `${mLabel} (LY)`, color: "#39a66a", dash: [7,5], data: lyData });
+  // Plan series: per-day plan values aligned to same labels
+  const planByDate = data.plan && data.plan.byDate;
+  if(planByDate){
+    const planRaw = (data.daily || []).map(d => {
+      const p = planByDate[d.day];
+      if(!p) return null;
+      return metric === "gmv" ? p.gmv / 1e7 : p.units / 1e5;
+    });
+    const planData = mode === "cumulative" ? (()=>{ let s=0; return planRaw.map(v => v===null?null:(s+=v,s)); })() : planRaw;
+    if(planData.some(v => v !== null))
+      series.push({ label: `${mLabel} (Plan)`, color: "#999", dash: [4,3], width: 1.5, data: planData });
+  }
   const el = document.getElementById("summaryDailyChart");
   if(!el) return;
   el.innerHTML = `<div class="chart" id="summaryDailyChartInner" style="height:260px">${svgLineChart(series, labels, unit)}</div>`;
@@ -1127,6 +1169,7 @@ function renderSummaryPage(data){
       <div class="legend">
         <span><i class="dot"></i>This Year (2026)</span>
         ${data.ly ? `<span><i class="dot ly"></i>Last Year (2025)</span>` : ""}
+        <span><i class="dot plan"></i>Plan</span>
       </div>
     </div>
 

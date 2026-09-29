@@ -46,7 +46,7 @@ SALES_SHEET_TAB_NAME = "Hourly_sales_2026"
 LY_SHEET_TAB_NAME = "Hourly_sales_2025"
 DAILY_CY_TAB = "Daily_sales_2026"   # Event Summary Sales — CY, on SALES_SHEET_ID
 DAILY_LY_TAB = "Daily_sales_2025"   # Event Summary Sales — LY, on SALES_SHEET_ID
-DAILY_CY_START = 20260910           # BBD 2026 starts 10 Sept
+DAILY_CY_START = 20260924           # BBD 2026 — filter from 24 Sept
 DAILY_LY_START = 20250825           # BBD 2025 starts 25 Aug
 # BAU lives in FUNNEL_LY_SHEET_ID (sheet 1zaFYp...), tab "BAU sales"
 BAU_SHEET_TAB_NAME = "BAU sales"
@@ -2106,20 +2106,22 @@ def load_sales_plan():
 
 
 def get_plan_for_dates(date_ints):
-    """Return plan totals and per-SC plan summed over a list of dates."""
+    """Return plan totals, per-SC totals, and per-date totals over a list of dates."""
     plan = load_sales_plan()
     by_sc_totals = {}
+    by_date_out = {}
     totals = {"gmv": 0.0, "units": 0.0}
     for d in date_ints:
         day_totals = plan["byDate"].get(d)
         if day_totals:
             totals["gmv"] += day_totals["gmv"]
             totals["units"] += day_totals["units"]
+            by_date_out[d] = day_totals
         for sc, vals in plan["bySC"].get(d, {}).items():
             e = by_sc_totals.setdefault(sc, {"gmv": 0.0, "units": 0.0})
             e["gmv"] += vals["gmv"]
             e["units"] += vals["units"]
-    return {"totals": totals, "bySC": by_sc_totals}
+    return {"totals": totals, "bySC": by_sc_totals, "byDate": by_date_out}
 
 
 def parse_filters(args):
