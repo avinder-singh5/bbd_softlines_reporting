@@ -794,20 +794,23 @@ function wireLiveChart(selectId, chartId, agg, ly, toggleId, metricsList){
     }
     const series = [{ label: m.label + " (TY)", color: "#2563eb", data: tyData }];
     if(lyData) series.push({ label: m.label + " (LY)", color: "#39a66a", dash: [7,5], data: lyData });
-    // Plan line for GMV / Units only
+    // Plan line for GMV / Units only — shaped by TY hourly mix
     if((m.key === "gmv" || m.key === "units") && agg.plan && agg.plan.totals){
       const planTotal = m.key === "gmv" ? agg.plan.totals.gmv / 1e7 : agg.plan.totals.units / 1e5;
       const hourCount = agg.excludedHour != null ? agg.excludedHour : 24;
-      const perHour = planTotal / 24;
-      if(mode === "cumulative"){
-        // ramp from perHour to planTotal over 24 h, null after hourCount
-        const planData = Array.from({length: 24}, (_, i) => i < hourCount ? perHour * (i + 1) : null);
-        series.push({ label: m.label + " (Plan)", color: "#999", dash: [4,3], width: 1.5, data: planData });
-      } else {
-        // flat per-hour rate, null after hourCount
-        const planData = Array.from({length: 24}, (_, i) => i < hourCount ? perHour : null);
-        series.push({ label: m.label + " (Plan)", color: "#999", dash: [4,3], width: 1.5, data: planData });
-      }
+      // Build per-hour weights from all 24 h of TY data (completed hours + in-progress)
+      const tyHourlyVals = Array.from({length: 24}, (_, i) => {
+        const row = agg.hourly.find(h => h.hour === i);
+        return row ? (row[m.key] || 0) : 0;
+      });
+      const tyTotal = tyHourlyVals.reduce((s, v) => s + v, 0);
+      const planData = tyTotal > 0
+        ? tyHourlyVals.map((v, i) => i < hourCount ? planTotal * (v / tyTotal) : null)
+        : Array.from({length: 24}, (_, i) => i < hourCount ? planTotal / 24 : null);
+      const planSeries = mode === "cumulative"
+        ? (() => { let s = 0; return planData.map(v => v === null ? null : (s += v, s)); })()
+        : planData;
+      series.push({ label: m.label + " (Plan)", color: "#999", dash: [4,3], width: 1.5, data: planSeries });
     }
     document.getElementById(chartId).innerHTML = svgLineChart(series, HOUR_LABELS, m.unit);
     attachChartHover(chartId, series, HOUR_LABELS, m.unit);
