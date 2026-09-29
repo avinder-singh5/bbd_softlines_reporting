@@ -347,6 +347,10 @@ SC_TO_MC = {
     "WomenWesternGrowth":               "Women Western",
     "KidClothing":                      "Kid Clothing",
 }
+# Inverse: MC display name → list of SC names
+MC_TO_SC_MEMBERS = {}
+for _sc, _mc in SC_TO_MC.items():
+    MC_TO_SC_MEMBERS.setdefault(_mc, []).append(_sc)
 
 def _mc_display(name):
     """Normalise megacat display name; returns None to drop the row."""
@@ -405,7 +409,9 @@ def aggregate_rows(values, col, target_bu, filters, date_key, hour_limit=None):
             pp["gmv"] += gmv; pp["units"] += units
 
         if mc_name is not None:  # skip "Others"
-            mcd = mc_data.setdefault(mc_name, {"gmv": 0, "units": 0, "byHour": {}, "payment": {"upi": 0, "cod": 0, "pbo": 0, "others": 0}, "pricePoints": {}})
+            mcd = mc_data.setdefault(mc_name, {"gmv": 0, "units": 0, "byHour": {}, "payment": {"upi": 0, "cod": 0, "pbo": 0, "others": 0}, "pricePoints": {}, "members": set()})
+            if sc_name:
+                mcd["members"].add(sc_name)
             mcd["gmv"] += gmv
             mcd["units"] += units
             mcd["payment"]["upi"] += upi
@@ -452,6 +458,7 @@ def aggregate_rows(values, col, target_bu, filters, date_key, hour_limit=None):
             {
                 "name": name, "gmv": v["gmv"], "units": v["units"], "hourly": to_hourly(v["byHour"]),
                 "paymentShare": payment_shares(v["payment"], v["units"]),
+                "members": sorted(v.get("members", [])),
                 "pricePoints": sorted(
                     [{"name": pp, "gmv": pv["gmv"], "units": pv["units"]} for pp, pv in v.get("pricePoints", {}).items()],
                     key=lambda r: r["name"]
@@ -1868,9 +1875,11 @@ def aggregate_daily_rows(values, col, target_bu, filters, min_date=None):
             ppd["units"] += units
 
         if mc_name:
-            mcd = mc_data.setdefault(mc_name, {"gmv": 0, "units": 0, "pricePoints": {}})
+            mcd = mc_data.setdefault(mc_name, {"gmv": 0, "units": 0, "pricePoints": {}, "members": set()})
             mcd["gmv"] += gmv
             mcd["units"] += units
+            if sc_name:
+                mcd["members"].add(sc_name)
             if pp_name:
                 ppd = mcd["pricePoints"].setdefault(pp_name, {"gmv": 0, "units": 0})
                 ppd["gmv"] += gmv
@@ -1893,6 +1902,7 @@ def aggregate_daily_rows(values, col, target_bu, filters, min_date=None):
         "superCategories": [{"name": n, "gmv": v["gmv"], "units": v["units"],
                               "pricePoints": pp_list(v["pricePoints"])} for n, v in sc_sorted],
         "megaCategories": [{"name": n, "gmv": v["gmv"], "units": v["units"],
+                             "members": sorted(v.get("members", [])),
                              "pricePoints": pp_list(v["pricePoints"])} for n, v in mc_sorted],
     }
 
@@ -2046,6 +2056,72 @@ def get_summary_sales_data(business_key, filters):
     }
 
 
+PLAN_TAB = "Sales Plan"  # in FUNNEL_LY_SHEET_ID
+
+def load_sales_plan():
+    """Read Sales Plan tab and return aggregated plan keyed by (date_int, sc).
+    Returns {"bySC": {date_int: {sc: {gmv, units}}}, "byDate": {date_int: {gmv, units}}}
+    Plan is at SC x day x Alpha/MP x Branded grain; we sum across Alpha and Branded."""
+    values = get_funnel_sheet_values(PLAN_TAB, sheet_id=FUNNEL_LY_SHEET_ID)
+    if not values or len(values) < 2:
+        return {"bySC": {}, "byDate": {}}
+    header = [str(h).strip() for h in values[0]]
+    def idx(name): return header.index(name) if name in header else -1
+    # Two columns named "Metric" — index 5 is type (Gmv/Units), index 6 is label
+    metric_col = 5
+    date_col = idx("date")
+    sc_col = idx("SC")
+    whole_col = idx("Whole")
+    if date_col < 0 or sc_col < 0 or whole_col < 0:
+        return {"bySC": {}, "byDate": {}}
+
+    by_sc = {}   # date_int -> sc -> {gmv, units}
+    by_date = {} # date_int -> {gmv, units}
+
+    for row in values[1:]:
+        if len(row) <= max(date_col, sc_col, whole_col, metric_col):
+            continue
+        try:
+            date_int = int(str(row[date_col]).strip())
+        except (ValueError, TypeError):
+            continue
+        sc = str(row[sc_col]).strip()
+        metric = str(row[metric_col]).strip().lower()  # 'gmv' or 'units'
+        if metric not in ("gmv", "units"):
+            continue
+        whole_raw = str(row[whole_col]).replace(",", "").strip()
+        try:
+            whole_val = float(whole_raw) if whole_raw else 0.0
+        except ValueError:
+            whole_val = 0.0
+
+        sc_map = by_sc.setdefault(date_int, {})
+        sc_entry = sc_map.setdefault(sc, {"gmv": 0.0, "units": 0.0})
+        sc_entry[metric] += whole_val
+
+        date_entry = by_date.setdefault(date_int, {"gmv": 0.0, "units": 0.0})
+        date_entry[metric] += whole_val
+
+    return {"bySC": by_sc, "byDate": by_date}
+
+
+def get_plan_for_dates(date_ints):
+    """Return plan totals and per-SC plan summed over a list of dates."""
+    plan = load_sales_plan()
+    by_sc_totals = {}
+    totals = {"gmv": 0.0, "units": 0.0}
+    for d in date_ints:
+        day_totals = plan["byDate"].get(d)
+        if day_totals:
+            totals["gmv"] += day_totals["gmv"]
+            totals["units"] += day_totals["units"]
+        for sc, vals in plan["bySC"].get(d, {}).items():
+            e = by_sc_totals.setdefault(sc, {"gmv": 0.0, "units": 0.0})
+            e["gmv"] += vals["gmv"]
+            e["units"] += vals["units"]
+    return {"totals": totals, "bySC": by_sc_totals}
+
+
 def parse_filters(args):
     return {k: args.get(k, "All") for k in FILTER_KEYS}
 
@@ -2068,8 +2144,12 @@ def api_live_sales():
         result = get_live_sales_data(business, filters, day_key)
     except Exception as e:  # noqa: BLE001 — surface any auth/API error to the UI
         return jsonify({"error": str(e)}), 500
-    # Only cache when both TY and LY are present — avoids serving a stale
-    # ly=None result after the LY sheet is populated mid-session.
+    # Attach plan for the selected date
+    if result.get("dateKey"):
+        try:
+            result["plan"] = get_plan_for_dates([result["dateKey"]])
+        except Exception:
+            result["plan"] = None
     if result["rowCount"] > 0 and result.get("ly") is not None:
         _aggregate_cache[key] = (now, result)
     return jsonify(result)
@@ -2088,6 +2168,13 @@ def api_summary_sales():
         result = get_summary_sales_data(business, filters)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    # Attach plan for all event dates
+    if result.get("daily"):
+        try:
+            event_dates = [d["day"] for d in result["daily"] if "day" in d]
+            result["plan"] = get_plan_for_dates(event_dates)
+        except Exception:
+            result["plan"] = None
     if result["rowCount"] > 0:
         _aggregate_cache[key] = (now, result)
     return jsonify(result)

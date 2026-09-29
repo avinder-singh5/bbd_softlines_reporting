@@ -62,7 +62,7 @@ function smoothSegmentPath(points){
 }
 /* Shared geometry so the hover overlay (attachChartHover) can compute the same
    pixel positions as the static chart it's drawn over. */
-const CHART_GEOM = { w: 1000, h: 340, padL: 62, padR: 18, padT: 18, padB: 34 };
+const CHART_GEOM = { w: 1000, h: 280, padL: 58, padR: 16, padT: 16, padB: 32 };
 function chartScales(series, labels){
   const { w, h, padL, padR, padT, padB } = CHART_GEOM;
   const allVals = series.flatMap(s => s.data).filter(v => v !== null && v !== undefined);
@@ -87,11 +87,7 @@ function svgLineChart(series, labels, axisUnit){
   const ticks = [0, 1, 2, 3, 4].map(i => min + i * step);
   const gridLines = ticks.map(t => {
     const gy = y(t).toFixed(1);
-    return `<line x1="${padL}" y1="${gy}" x2="${w-padR}" y2="${gy}" stroke="#eef1f7" stroke-width="1" shape-rendering="crispEdges"/>`;
-  }).join("");
-  const yLabels = ticks.map(t => {
-    const gy = y(t);
-    return `<text x="${padL-10}" y="${(gy+4).toFixed(1)}" font-size="12" fill="#8793a7" text-anchor="end">${fmtVal(t, axisUnit || "cr", 1)}</text>`;
+    return `<line x1="${padL}" y1="${gy}" x2="${w-padR}" y2="${gy}" stroke="#e8ecf4" stroke-width="1" shape-rendering="crispEdges"/>`;
   }).join("");
 
   const defs = series.map((s, si) => `
@@ -119,18 +115,55 @@ function svgLineChart(series, labels, axisUnit){
       return `<path d="${d} L${pts[pts.length-1].x.toFixed(1)},${base} L${pts[0].x.toFixed(1)},${base} Z" fill="url(#chartFill${si})" stroke="none"/>`;
     }).join("") : "";
 
-    const line = runs.map(pts => `<path fill="none" stroke="${s.color}" stroke-width="${s.width||3}" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="${s.dash ? s.dash.join(",") : "0"}" d="${smoothSegmentPath(pts)}"/>`).join("");
+    const line = runs.map(pts => `<path fill="none" stroke="${s.color}" stroke-width="${s.width||2.5}" stroke-linecap="round" stroke-linejoin="round" shape-rendering="geometricPrecision" stroke-dasharray="${s.dash ? s.dash.join(",") : "0"}" d="${smoothSegmentPath(pts)}"/>`).join("");
 
     return fillArea + line;
   }).join("");
 
-  const xStep = Math.ceil(labels.length / 8) || 1;
-  const xLabels = labels.map((l, i) => (i % xStep === 0 || i === labels.length-1)
-    ? `<text x="${x(i).toFixed(1)}" y="${h-10}" font-size="12" fill="#9aa7bb" text-anchor="middle">${l}</text>` : "").join("");
-
   const axisLine = `<line x1="${padL}" y1="${padT}" x2="${padL}" y2="${h-padB}" stroke="#d5dce8" stroke-width="1" shape-rendering="crispEdges"/>`;
 
-  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><defs>${defs}</defs>${gridLines}${axisLine}${yLabels}${paths}${xLabels}</svg>`;
+  // No text inside SVG — labels injected as HTML by attachChartLabels() for crispness
+  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="display:block;width:100%;height:100%"><defs>${defs}</defs>${gridLines}${axisLine}${paths}</svg>`;
+}
+
+function attachChartLabels(containerId, series, labels, axisUnit){
+  const container = document.getElementById(containerId);
+  if(!container) return;
+  const scales = chartScales(series, labels);
+  if(!scales.hasData) return;
+  const { x, y, max, min, step } = scales;
+  const { w, h, padL, padR, padT, padB } = CHART_GEOM;
+
+  let layer = container.querySelector(".chart-label-layer");
+  if(layer) layer.remove();
+  layer = document.createElement("div");
+  layer.className = "chart-label-layer";
+  layer.style.cssText = "position:absolute;inset:0;pointer-events:none;overflow:hidden";
+  container.appendChild(layer);
+
+  const ticks = [0, 1, 2, 3, 4].map(i => min + i * step);
+  ticks.forEach(t => {
+    const rect = container.getBoundingClientRect();
+    const scaleX = w / rect.width, scaleY = h / rect.height;
+    const pxY = y(t) / scaleY;
+    const el = document.createElement("div");
+    el.style.cssText = `position:absolute;right:${rect.width - padL/scaleX + 4}px;top:${pxY - 7}px;font-size:10px;color:#8793a7;white-space:nowrap;line-height:1`;
+    el.textContent = fmtVal(t, axisUnit || "cr", 1);
+    layer.appendChild(el);
+  });
+
+  const xStep = Math.ceil(labels.length / 8) || 1;
+  labels.forEach((l, i) => {
+    if(i % xStep !== 0 && i !== labels.length - 1) return;
+    const rect = container.getBoundingClientRect();
+    const scaleX = w / rect.width, scaleY = h / rect.height;
+    const pxX = x(i) / scaleX;
+    const pxBottom = (h - padB) / scaleY;
+    const el = document.createElement("div");
+    el.style.cssText = `position:absolute;left:${pxX}px;top:${pxBottom + 4}px;font-size:10px;color:#9aa7bb;transform:translateX(-50%);white-space:nowrap;line-height:1`;
+    el.textContent = l;
+    layer.appendChild(el);
+  });
 }
 /* Crosshair + per-series dots + tooltip, drawn as absolutely-positioned HTML
    over the chart container (simpler than mutating the SVG DOM on every move). */
@@ -454,6 +487,22 @@ function spikeBadge(label, spike){
   const cls = spike >= 1 ? "up" : "down";
   return `<div class="spike-line">${label} <span class="${cls}">${spike.toFixed(2)}x</span> BAU</div>`;
 }
+function achBadge(actual, plan){
+  if(!plan || !isFinite(plan) || plan === 0) return "";
+  const pct = (actual / plan) * 100;
+  const cls = pct >= 100 ? "up" : pct >= 90 ? "" : "down";
+  return `<span class="stat ${cls}">${pct.toFixed(1)}% vs Plan</span>`;
+}
+function planCell(planVal, unit){
+  if(!planVal && planVal !== 0) return `<td class="plan-col">—</td><td class="plan-col">—</td>`;
+  return `<td class="plan-col">${fmtVal(planVal, unit)}</td>`;
+}
+function achCell(actual, plan, unit){
+  if(!plan || plan === 0) return `<td class="plan-col">—</td>`;
+  const pct = (actual / plan) * 100;
+  const cls = pct >= 100 ? "up" : pct >= 90 ? "" : "down";
+  return `<td class="plan-col ${cls}">${pct.toFixed(1)}%</td>`;
+}
 
 let _lastFilterOpts = {};
 function populateLiveFilterOptions(){
@@ -513,9 +562,12 @@ function renderLiveKpiCards(targetId, agg, ly){
   const lyPs = (ly && ly.paymentShare) || {};
   const bau = agg.bauSpike || {};
   const gmvSpike = bau.gmv || {}, unitsSpike = bau.units || {};
+  const plan = agg.plan && agg.plan.totals;
+  const planGmvCr = plan ? plan.gmv / 1e7 : null;
+  const planUnitsL = plan ? plan.units / 1e5 : null;
   document.getElementById(targetId).innerHTML = `
-    <div class="card kpi"><label>GMV</label><div class="value">${fmtVal(totals.gmv,"rs_cr")}</div><div class="statrow">${yoyBadge(gmvYoy)}</div><div class="spikerow">${spikeBadge("CY", gmvSpike.cy)}${spikeBadge("LY", gmvSpike.ly)}</div></div>
-    <div class="card kpi"><label>Units</label><div class="value">${fmtVal(totals.units,"l")}</div><div class="statrow">${yoyBadge(unitsYoy)}</div><div class="spikerow">${spikeBadge("CY", unitsSpike.cy)}${spikeBadge("LY", unitsSpike.ly)}</div></div>
+    <div class="card kpi"><label>GMV</label><div class="value">${fmtVal(totals.gmv,"rs_cr")}</div><div class="statrow">${yoyBadge(gmvYoy)}${achBadge(totals.gmv, planGmvCr)}</div>${planGmvCr?`<div class="spikerow"><span style="color:var(--muted);font-size:10px">Plan ${fmtVal(planGmvCr,"rs_cr")}</span></div>`:""}${spikeBadge("CY",gmvSpike.cy)?`<div class="spikerow">${spikeBadge("CY",gmvSpike.cy)}${spikeBadge("LY",gmvSpike.ly)}</div>`:""}</div>
+    <div class="card kpi"><label>Units</label><div class="value">${fmtVal(totals.units,"l")}</div><div class="statrow">${yoyBadge(unitsYoy)}${achBadge(totals.units, planUnitsL)}</div>${planUnitsL?`<div class="spikerow"><span style="color:var(--muted);font-size:10px">Plan ${fmtVal(planUnitsL,"l")}</span></div>`:""}${spikeBadge("CY",unitsSpike.cy)?`<div class="spikerow">${spikeBadge("CY",unitsSpike.cy)}${spikeBadge("LY",unitsSpike.ly)}</div>`:""}</div>
     <div class="card kpi"><label>ASP</label><div class="value">${fmtVal(totals.asp,"rs")}</div><div class="statrow">${yoyBadge(aspYoy)}</div></div>
     <div class="card kpi"><label>UPI Share</label><div class="value">${pct1(ps.upi)}</div><div class="statrow">${ppBadge(ps.upi, lyPs.upi)}</div></div>
     <div class="card kpi"><label>COD Share</label><div class="value">${pct1(ps.cod)}</div><div class="statrow">${ppBadge(ps.cod, lyPs.cod)}</div></div>
@@ -531,32 +583,33 @@ function renderLiveTable(targetId, agg){
     const yoy = ly ? yoyPct(cy, ly) : null;
     return `<td>${fmtVal(cy, unit)}</td><td>${ly ? fmtVal(ly, unit) : "—"}</td>${yoyCell(yoy)}`;
   };
+  // Segment table has no plan at row level — show empty plan cols
+  const noPlan = `<td class="plan-col">—</td><td class="plan-col">—</td>`;
 
   const tbody = document.getElementById(targetId);
   let html = "";
-  let rowIdx = 0;
 
   rows.forEach((r, pi) => {
     const parentKey = `p${pi}`;
     html += `<tr class="seg-parent" data-key="${parentKey}">
       <td><span class="seg-toggle">▸</span><b>${escapeHtml(r.label)}</b></td>
-      ${cell(r.tyGmv/1e7, r.lyGmv/1e7, "rs_cr")}${spikeCell(r.cyGmvSpike)}${spikeCell(r.lyGmvSpike)}
-      ${cell(r.tyUnits/1e5, r.lyUnits/1e5, "l")}${spikeCell(r.cyUnitsSpike)}${spikeCell(r.lyUnitsSpike)}
+      ${cell(r.tyGmv/1e7, r.lyGmv/1e7, "rs_cr")}${spikeCell(r.cyGmvSpike)}${spikeCell(r.lyGmvSpike)}${noPlan}
+      ${cell(r.tyUnits/1e5, r.lyUnits/1e5, "l")}${spikeCell(r.cyUnitsSpike)}${spikeCell(r.lyUnitsSpike)}${noPlan}
     </tr>`;
 
     (r.children || []).forEach((c, ci) => {
       const childKey = `${parentKey}-c${ci}`;
       html += `<tr class="seg-child seg-l1 hidden" data-parent-key="${parentKey}" data-key="${childKey}">
         <td><span class="seg-toggle">▸</span>${escapeHtml(c.label)}</td>
-        ${cell(c.tyGmv/1e7, c.lyGmv/1e7, "rs_cr")}${spikeCell(c.cyGmvSpike)}${spikeCell(c.lyGmvSpike)}
-        ${cell(c.tyUnits/1e5, c.lyUnits/1e5, "l")}${spikeCell(c.cyUnitsSpike)}${spikeCell(c.lyUnitsSpike)}
+        ${cell(c.tyGmv/1e7, c.lyGmv/1e7, "rs_cr")}${spikeCell(c.cyGmvSpike)}${spikeCell(c.lyGmvSpike)}${noPlan}
+        ${cell(c.tyUnits/1e5, c.lyUnits/1e5, "l")}${spikeCell(c.cyUnitsSpike)}${spikeCell(c.lyUnitsSpike)}${noPlan}
       </tr>`;
 
       (c.children || []).forEach((g, gi) => {
         html += `<tr class="seg-child seg-l2 hidden" data-parent-key="${childKey}">
           <td>${escapeHtml(g.label)}</td>
-          ${cell(g.tyGmv/1e7, g.lyGmv/1e7, "gmv_auto")}${spikeCell(g.cyGmvSpike)}${spikeCell(g.lyGmvSpike)}
-          ${cell(g.tyUnits/1e5, g.lyUnits/1e5, "units_auto")}${spikeCell(g.cyUnitsSpike)}${spikeCell(g.lyUnitsSpike)}
+          ${cell(g.tyGmv/1e7, g.lyGmv/1e7, "gmv_auto")}${spikeCell(g.cyGmvSpike)}${spikeCell(g.lyGmvSpike)}${noPlan}
+          ${cell(g.tyUnits/1e5, g.lyUnits/1e5, "units_auto")}${spikeCell(g.cyUnitsSpike)}${spikeCell(g.lyUnitsSpike)}${noPlan}
         </tr>`;
       });
     });
@@ -608,6 +661,8 @@ function renderNamedBreakdownTable(targetId, agg, fieldName){
   };
   const lyByName = {};
   ((agg.ly && agg.ly[fieldName]) || []).forEach(s => { lyByName[s.name] = s; });
+  // Build SC-level plan lookup — for MC rows, sum plan across their SCs
+  const planBySC = (agg.plan && agg.plan.bySC) || {};
   const rows = agg[fieldName] || [];
   const tbody = document.getElementById(targetId);
   let html = "";
@@ -616,18 +671,34 @@ function renderNamedBreakdownTable(targetId, agg, fieldName){
     const hasPP = r.pricePoints && r.pricePoints.length > 0;
     const lyPpByName = {};
     ((ly && ly.pricePoints) || []).forEach(p => { lyPpByName[p.name] = p; });
+    // For SC table: planBySC[r.name]; for MC table: sum across SC members
+    let planGmv = null, planUnits = null;
+    if(planBySC[r.name]){
+      // direct SC match
+      planGmv = planBySC[r.name].gmv;
+      planUnits = planBySC[r.name].units;
+    } else if(r.members){
+      // MC row — sum plan across member SCs
+      planGmv = 0; planUnits = 0;
+      r.members.forEach(sc => { const p = planBySC[sc]; if(p){ planGmv += p.gmv; planUnits += p.units; } });
+      if(planGmv === 0 && planUnits === 0) { planGmv = null; planUnits = null; }
+    }
+    const planGmvCr = planGmv !== null ? planGmv / 1e7 : null;
+    const planUnitsL = planUnits !== null ? planUnits / 1e5 : null;
     html += `<tr class="seg-parent" data-key="np${i}" style="cursor:${hasPP?"pointer":"default"}">
       <td>${hasPP?`<span class="seg-toggle">▸</span>`:""}${escapeHtml(r.name)}</td>
       ${cell(r.gmv/1e7, ly?ly.gmv/1e7:null,"rs_cr")}${spikeCell(r.cyGmvSpike)}${spikeCell(r.lyGmvSpike)}
+      <td class="plan-col">${planGmvCr!==null?fmtVal(planGmvCr,"rs_cr"):"—"}</td>${achCell(r.gmv/1e7,planGmvCr,"rs_cr")}
       ${cell(r.units/1e5, ly?ly.units/1e5:null,"l")}${spikeCell(r.cyUnitsSpike)}${spikeCell(r.lyUnitsSpike)}
+      <td class="plan-col">${planUnitsL!==null?fmtVal(planUnitsL,"l"):"—"}</td>${achCell(r.units/1e5,planUnitsL,"l")}
     </tr>`;
     if(hasPP){
       r.pricePoints.forEach(pp => {
         const lyPp = lyPpByName[pp.name] || null;
         html += `<tr class="seg-child seg-l1 hidden" data-parent-key="np${i}">
           <td>${escapeHtml(pp.name)}</td>
-          ${cell(pp.gmv/1e7, lyPp?lyPp.gmv/1e7:null,"gmv_auto")}<td>—</td><td>—</td>
-          ${cell(pp.units/1e5, lyPp?lyPp.units/1e5:null,"units_auto")}<td>—</td><td>—</td>
+          ${cell(pp.gmv/1e7, lyPp?lyPp.gmv/1e7:null,"gmv_auto")}<td>—</td><td>—</td><td class="plan-col">—</td><td class="plan-col">—</td>
+          ${cell(pp.units/1e5, lyPp?lyPp.units/1e5:null,"units_auto")}<td>—</td><td>—</td><td class="plan-col">—</td><td class="plan-col">—</td>
         </tr>`;
       });
     }
@@ -710,6 +781,7 @@ function wireLiveChart(selectId, chartId, agg, ly, toggleId, metricsList){
     if(lyData) series.push({ label: m.label + " (LY)", color: "#39a66a", dash: [7,5], data: lyData });
     document.getElementById(chartId).innerHTML = svgLineChart(series, HOUR_LABELS, m.unit);
     attachChartHover(chartId, series, HOUR_LABELS, m.unit);
+    attachChartLabels(chartId, series, HOUR_LABELS, m.unit);
   };
   sel.onchange = paintChart;
   if(toggle){
@@ -833,7 +905,7 @@ function breakdownTableHtml(title, tbodyId, hourCount, rowLabel, ns){
       <span class="cbl">Filter:</span>${filterBar}
     </div>
     <div class="table-wrap"><table class="table">
-      <thead><tr><th>${rowLabel}</th><th>GMV CY</th><th>GMV LY</th><th>GMV YoY</th><th>GMV CY Spike</th><th>GMV LY Spike</th><th>Units CY</th><th>Units LY</th><th>Units YoY</th><th>Units CY Spike</th><th>Units LY Spike</th></tr></thead>
+      <thead><tr><th>${rowLabel}</th><th>GMV CY</th><th>GMV LY</th><th>GMV YoY</th><th>GMV CY Spike</th><th>GMV LY Spike</th><th class="plan-col">GMV Plan</th><th class="plan-col">GMV Ach%</th><th>Units CY</th><th>Units LY</th><th>Units YoY</th><th>Units CY Spike</th><th>Units LY Spike</th><th class="plan-col">Units Plan</th><th class="plan-col">Units Ach%</th></tr></thead>
       <tbody id="${tbodyId}"></tbody>
     </table></div>
   </div>`;
@@ -949,9 +1021,12 @@ function renderSummaryKpiCards(data){
   const lyPs = (ly && ly.paymentShare) || {};
   const bau = data.bauSpike || {};
   const gmvSpike = bau.gmv || {}, unitsSpike = bau.units || {};
+  const plan = data.plan && data.plan.totals;
+  const planGmvCr = plan ? plan.gmv / 1e7 : null;
+  const planUnitsL = plan ? plan.units / 1e5 : null;
   document.getElementById("summaryKpiRow").innerHTML = `
-    <div class="card kpi"><label>GMV</label><div class="value">${fmtVal(totals.gmv,"rs_cr")}</div><div class="statrow">${yoyBadge(lyTotals ? yoyPct(totals.gmv,lyTotals.gmv) : null)}</div><div class="spikerow">${spikeBadge("CY",gmvSpike.cy)}${spikeBadge("LY",gmvSpike.ly)}</div></div>
-    <div class="card kpi"><label>Units</label><div class="value">${fmtVal(totals.units,"l")}</div><div class="statrow">${yoyBadge(lyTotals ? yoyPct(totals.units,lyTotals.units) : null)}</div><div class="spikerow">${spikeBadge("CY",unitsSpike.cy)}${spikeBadge("LY",unitsSpike.ly)}</div></div>
+    <div class="card kpi"><label>GMV</label><div class="value">${fmtVal(totals.gmv,"rs_cr")}</div><div class="statrow">${yoyBadge(lyTotals ? yoyPct(totals.gmv,lyTotals.gmv) : null)}${achBadge(totals.gmv,planGmvCr)}</div>${planGmvCr?`<div class="spikerow"><span style="color:var(--muted);font-size:10px">Plan ${fmtVal(planGmvCr,"rs_cr")}</span></div>`:""}<div class="spikerow">${spikeBadge("CY",gmvSpike.cy)}${spikeBadge("LY",gmvSpike.ly)}</div></div>
+    <div class="card kpi"><label>Units</label><div class="value">${fmtVal(totals.units,"l")}</div><div class="statrow">${yoyBadge(lyTotals ? yoyPct(totals.units,lyTotals.units) : null)}${achBadge(totals.units,planUnitsL)}</div>${planUnitsL?`<div class="spikerow"><span style="color:var(--muted);font-size:10px">Plan ${fmtVal(planUnitsL,"l")}</span></div>`:""}<div class="spikerow">${spikeBadge("CY",unitsSpike.cy)}${spikeBadge("LY",unitsSpike.ly)}</div></div>
     <div class="card kpi"><label>ASP</label><div class="value">${fmtVal(totals.asp,"rs")}</div><div class="statrow">${yoyBadge(lyTotals ? yoyPct(totals.asp,lyTotals.asp) : null)}</div></div>
     <div class="card kpi"><label>UPI Share</label><div class="value">${pct1(ps.upi)}</div><div class="statrow">${ppBadge(ps.upi,lyPs.upi)}</div></div>
     <div class="card kpi"><label>COD Share</label><div class="value">${pct1(ps.cod)}</div><div class="statrow">${ppBadge(ps.cod,lyPs.cod)}</div></div>
@@ -989,6 +1064,7 @@ function renderSummaryDailyChart(data, metric, mode){
   if(!el) return;
   el.innerHTML = `<div class="chart" id="summaryDailyChartInner" style="height:260px">${svgLineChart(series, labels, unit)}</div>`;
   attachChartHover("summaryDailyChartInner", series, labels, unit);
+  attachChartLabels("summaryDailyChartInner", series, labels, unit);
 }
 
 function renderSummaryFilterOptions(data){
@@ -1386,6 +1462,7 @@ function renderSummaryFunnelDailyChart(data, metricKey){
   if(!el) return;
   el.innerHTML = `<div class="chart" id="sfunnelDailyChartInner" style="height:260px">${svgLineChart(series, labels, unit)}</div>`;
   attachChartHover("sfunnelDailyChartInner", series, labels, unit);
+  attachChartLabels("sfunnelDailyChartInner", series, labels, unit);
 }
 
 function renderSummaryFunnelPage(data){
@@ -1515,6 +1592,7 @@ function renderSummaryTrafficDailyChart(data, metricKey){
   if(!el) return;
   el.innerHTML = `<div class="chart" id="strafficDailyChartInner" style="height:260px">${svgLineChart(series, labels, "m")}</div>`;
   attachChartHover("strafficDailyChartInner", series, labels, "m");
+  attachChartLabels("strafficDailyChartInner", series, labels, "m");
 }
 
 function renderSummaryTrafficPage(data){
